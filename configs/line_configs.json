@@ -1,1 +1,25 @@
-{}
+{
+  "version": "1.0",
+  "lines": {
+    "line_4a50a104": {
+      "line_id": "line_4a50a104",
+      "name": "테스트 라인",
+      "start_point": [
+        100,
+        100
+      ],
+      "end_point": [
+        200,
+        200
+      ],
+      "is_active": true,
+      "view_type": "entrance",
+      "thickness": 3.0,
+      "color": [
+        0,
+        255,
+        0
+      ],
+      "direction_config": {
+        "angle": 45.0,
+        "is_horizontal": 
