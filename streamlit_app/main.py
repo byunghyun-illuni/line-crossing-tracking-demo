@@ -1,7 +1,7 @@
 """
 2D Access Control MVP - Streamlit 메인 애플리케이션
 
-OC-SORT 기반 라인 크로싱 추적 시스템
+OC-SORT 기반 라인 크로싱 추적 시스템 (YOLOX 검출기 포함)
 """
 
 import logging
@@ -35,6 +35,7 @@ project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
 from src.core.models import DetectionResult
+from src.tracking.detector_configs import list_configs
 from src.tracking.engine import ObjectTracker
 from src.video.source import VideoSource
 
@@ -61,18 +62,31 @@ class StreamlitApp:
         self.video_loaded = False
         self.tracker_initialized = False
 
-    def initialize_tracker(self, confidence_threshold: float):
-        """트래커 초기화"""
+    def initialize_tracker(
+        self, confidence_threshold: float, detector_config: str = "balanced"
+    ):
+        """트래커 초기화 (YOLOX 검출기 포함)"""
         try:
-            self.tracker = ObjectTracker(det_thresh=confidence_threshold)
+            logger.info(
+                f"트래커 초기화 중... (검출기: {detector_config}, 신뢰도: {confidence_threshold})"
+            )
+
+            self.tracker = ObjectTracker(
+                det_thresh=confidence_threshold, detector_config=detector_config
+            )
             self.tracker_initialized = True
-            logger.info(f"트래커 초기화 완료 (신뢰도 임계값: {confidence_threshold})")
+            logger.info(f"트래커 초기화 완료 (YOLOX {detector_config} 검출기)")
         except Exception as e:
             logger.error(f"트래커 초기화 실패: {e}")
             self.tracker_initialized = False
             raise
 
-    def process_video_file(self, uploaded_file, confidence_threshold: float):
+    def process_video_file(
+        self,
+        uploaded_file,
+        confidence_threshold: float,
+        detector_config: str = "balanced",
+    ):
         """비디오 파일 처리"""
         try:
             logger.info(f"비디오 파일 처리 시작: {uploaded_file.name}")
@@ -120,14 +134,14 @@ class StreamlitApp:
             logger.info("비디오 파일 열기 성공")
             st.success("✅ 비디오 파일 열기 성공!")
 
-            # 트래커 초기화
-            logger.info("트래커 초기화 중...")
-            st.info("🎯 트래커 초기화 중...")
+            # 트래커 초기화 (YOLOX 검출기 포함)
+            logger.info(f"트래커 초기화 중... (검출기: {detector_config})")
+            st.info(f"🎯 트래커 초기화 중... (YOLOX {detector_config} 검출기)")
 
             try:
-                self.initialize_tracker(confidence_threshold)
+                self.initialize_tracker(confidence_threshold, detector_config)
                 logger.info("트래커 초기화 성공")
-                st.success("✅ 트래커 초기화 성공!")
+                st.success("✅ 트래커 초기화 성공! (YOLOX 검출기 활성화)")
             except Exception as e:
                 error_msg = f"트래커 초기화 실패: {e}"
                 logger.error(error_msg)
@@ -186,7 +200,12 @@ class StreamlitApp:
             self.tracker_initialized = False
             return False
 
-    def process_camera(self, camera_id: int, confidence_threshold: float = 0.6):
+    def process_camera(
+        self,
+        camera_id: int,
+        confidence_threshold: float = 0.6,
+        detector_config: str = "balanced",
+    ):
         """카메라 처리"""
         try:
             logger.info(f"카메라 연결 시도: ID {camera_id}")
@@ -199,7 +218,7 @@ class StreamlitApp:
                 return False
 
             # 트래커 자동 초기화
-            self.initialize_tracker(confidence_threshold)
+            self.initialize_tracker(confidence_threshold, detector_config)
 
             # 상태 플래그 설정
             self.video_loaded = True
@@ -381,6 +400,7 @@ def main():
         # 추적 설정
         st.subheader("🎯 추적 설정")
         confidence_threshold = st.slider("신뢰도 임계값", 0.1, 1.0, 0.6, 0.1)
+        detector_config = st.selectbox("검출기 설정", list_configs())
 
         st.markdown("---")
 
@@ -400,7 +420,9 @@ def main():
 
             if st.button("📹 카메라 연결 및 시작", use_container_width=True):
                 with st.spinner("카메라 연결 중..."):
-                    success = app.process_camera(camera_id, confidence_threshold)
+                    success = app.process_camera(
+                        camera_id, confidence_threshold, detector_config
+                    )
                     if success:
                         app.is_running = True
                         st.success("✅ 카메라 연결 및 추적을 시작합니다!")
@@ -420,7 +442,7 @@ def main():
                 if st.button("📁 파일 로드 및 시작", use_container_width=True):
                     with st.spinner("비디오 파일 로드 중..."):
                         success = app.process_video_file(
-                            uploaded_file, confidence_threshold
+                            uploaded_file, confidence_threshold, detector_config
                         )
                         if success:
                             app.is_running = True

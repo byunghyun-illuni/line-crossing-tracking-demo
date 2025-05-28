@@ -1,22 +1,25 @@
 """
-Object tracking engine using official OC-SORT implementation.
+Object tracking engine using official OC-SORT implementation with YOLOX detector.
 """
 
 import logging
-from typing import List, Optional
+from typing import List, Optional, Union
 
 import cv2
 import numpy as np
 
 from ..core.models import DetectionResult, TrackingFrame
+from .detector_configs import DetectorConfig, get_config
 from .ocsort_tracker.ocsort import OCSort
+from .yolox_detector import YOLOXDetector
 
 logger = logging.getLogger(__name__)
 
 
 class ObjectTracker:
     """
-    Object tracker using official OC-SORT implementation.
+    Object tracker using official OC-SORT implementation with YOLOX detector.
+    This replaces the slow HOGDescriptor with a modern, fast detection system.
     """
 
     def __init__(
@@ -29,12 +32,17 @@ class ObjectTracker:
         asso_func: str = "iou",
         inertia: float = 0.2,
         use_byte: bool = False,
+        detector_config: Union[str, DetectorConfig, None] = None,
+        detector_model: Optional[str] = None,
+        detector_confidence: Optional[float] = None,
+        target_classes: Optional[List[str]] = None,
+        device: Optional[str] = None,
     ):
         """
-        Initialize OC-SORT tracker.
+        Initialize OC-SORT tracker with YOLOX detector.
 
         Args:
-            det_thresh: Detection confidence threshold
+            det_thresh: Detection confidence threshold for tracker
             max_age: Maximum number of frames to keep alive a track without associated detections
             min_hits: Minimum number of associated detections before track is initialised
             iou_threshold: Minimum IOU for match
@@ -42,6 +50,11 @@ class ObjectTracker:
             asso_func: Association function ("iou", "giou", "ciou", "diou", "ct_dist")
             inertia: Inertia factor for velocity
             use_byte: Whether to use ByteTrack association
+            detector_config: Predefined detector config name or DetectorConfig instance
+            detector_model: Model name for YOLOX detector (overrides config)
+            detector_confidence: Confidence threshold for detector (overrides config)
+            target_classes: List of class names to detect (overrides config)
+            device: Device for detector inference (overrides config)
         """
         self.tracker = OCSort(
             det_thresh=det_thresh,
@@ -54,15 +67,42 @@ class ObjectTracker:
             use_byte=use_byte,
         )
 
-        # Fallback detection using HOG
-        self.hog = cv2.HOGDescriptor()
-        self.hog.setSVMDetector(cv2.HOGDescriptor_getDefaultPeopleDetector())
+        # Handle detector configuration
+        if detector_config is not None:
+            if isinstance(detector_config, str):
+                config = get_config(detector_config)
+            else:
+                config = detector_config
 
-        logger.info("ObjectTracker initialized with OC-SORT")
+            # Use config values, but allow overrides
+            detector_params = {
+                "model_name": detector_model or config.model_name,
+                "confidence_threshold": detector_confidence
+                or config.confidence_threshold,
+                "target_classes": target_classes or config.target_classes,
+                "device": device or config.device,
+            }
+        else:
+            # Use default values or provided parameters
+            detector_params = {
+                "model_name": detector_model or "fasterrcnn_resnet50_fpn",
+                "confidence_threshold": detector_confidence or 0.6,
+                "target_classes": target_classes or ["person"],
+                "device": device,
+            }
+
+        # Initialize YOLOX detector (replaces HOGDescriptor)
+        self.detector = YOLOXDetector(**detector_params)
+
+        # Warm up the detector for faster first inference
+        self.detector.warmup()
+
+        logger.info("ObjectTracker initialized with OC-SORT and YOLOX detector")
+        logger.info(f"Detector config: {detector_params}")
 
     def detect_objects(self, frame: np.ndarray) -> List[DetectionResult]:
         """
-        Detect objects in frame using HOG detector as fallback.
+        Detect objects in frame using YOLOX detector.
 
         Args:
             frame: Input frame
@@ -70,33 +110,7 @@ class ObjectTracker:
         Returns:
             List of detection results
         """
-        try:
-            # Use HOG detector for person detection
-            boxes, weights = self.hog.detectMultiScale(
-                frame, winStride=(8, 8), padding=(32, 32), scale=1.05
-            )
-
-            detections = []
-            for i, (box, weight) in enumerate(zip(boxes, weights)):
-                x, y, w, h = box
-                center_x = x + w / 2
-                center_y = y + h / 2
-
-                detection = DetectionResult(
-                    track_id=-1,  # Will be assigned by tracker
-                    bbox=(x, y, w, h),
-                    center_point=(center_x, center_y),
-                    confidence=float(weight),
-                    class_name="person",
-                    timestamp=0.0,  # Will be set by caller
-                )
-                detections.append(detection)
-
-            return detections
-
-        except Exception as e:
-            logger.error(f"Detection failed: {e}")
-            return []
+        return self.detector.detect_objects(frame)
 
     def track_frame(
         self, frame: np.ndarray, detections: Optional[List[DetectionResult]] = None
