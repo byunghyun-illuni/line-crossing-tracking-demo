@@ -10,7 +10,7 @@ import sys
 import tempfile
 import time
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional
 
 import cv2
 import numpy as np
@@ -34,7 +34,9 @@ os.environ["OPENCV_AVFOUNDATION_SKIP_AUTH"] = "1"
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
-from src.core.models import DetectionResult
+from src.core.models import CrossingEvent, DetectionResult
+from src.line_crossing.detector import LineCrossingDetector
+from src.line_crossing.manager import LineManager
 from src.tracking.detector_configs import list_configs
 from src.tracking.engine import ObjectTracker
 from src.video.source import VideoSource
@@ -54,13 +56,60 @@ class StreamlitApp:
     def __init__(self):
         self.video_source = None
         self.tracker = None
+        self.line_manager = None
+        self.crossing_detector = None
         self.is_running = False
         self.frame_count = 0
         self.detection_count = 0
         self.crossing_count = 0
+        self.recent_crossings = []  # 최근 교차 이벤트들
         # 상태 추적을 위한 플래그 추가
         self.video_loaded = False
         self.tracker_initialized = False
+        self.lines_initialized = False
+
+    def initialize_line_system(self):
+        """라인 시스템 초기화"""
+        try:
+            self.line_manager = LineManager()
+            self.crossing_detector = LineCrossingDetector(self.line_manager)
+            self.lines_initialized = True
+            logger.info("라인 시스템 초기화 완료")
+
+            # 기본 라인이 없으면 생성
+            if self.line_manager.get_line_count() == 0:
+                self.create_default_lines()
+
+        except Exception as e:
+            logger.error(f"라인 시스템 초기화 실패: {e}")
+            self.lines_initialized = False
+            raise
+
+    def create_default_lines(self):
+        """기본 라인들 생성"""
+        try:
+            # 수평 라인 (화면 중앙)
+            self.line_manager.create_line(
+                name="중앙 수평선",
+                start_point=(100, 240),
+                end_point=(540, 240),
+                color=(0, 255, 0),  # 녹색
+                thickness=3,
+            )
+
+            # 수직 라인 (화면 중앙)
+            self.line_manager.create_line(
+                name="중앙 수직선",
+                start_point=(320, 100),
+                end_point=(320, 380),
+                color=(255, 0, 0),  # 빨간색
+                thickness=3,
+            )
+
+            logger.info("기본 라인 2개 생성 완료")
+
+        except Exception as e:
+            logger.error(f"기본 라인 생성 실패: {e}")
 
     def initialize_tracker(
         self, confidence_threshold: float, detector_config: str = "balanced"
@@ -76,6 +125,11 @@ class StreamlitApp:
             )
             self.tracker_initialized = True
             logger.info(f"트래커 초기화 완료 (YOLOX {detector_config} 검출기)")
+
+            # 라인 시스템도 함께 초기화
+            if not self.lines_initialized:
+                self.initialize_line_system()
+
         except Exception as e:
             logger.error(f"트래커 초기화 실패: {e}")
             self.tracker_initialized = False
@@ -246,8 +300,34 @@ class StreamlitApp:
             self.tracker_initialized = False
             return False
 
-    def draw_detections(self, frame: np.ndarray, detections: list) -> np.ndarray:
-        """프레임에 감지 결과 그리기"""
+    def draw_detections_and_lines(
+        self, frame: np.ndarray, detections: list
+    ) -> np.ndarray:
+        """프레임에 감지 결과와 가상 라인 그리기"""
+        # 1. 가상 라인들 그리기
+        if self.line_manager:
+            active_lines = self.line_manager.get_active_lines()
+            for line_id, line in active_lines.items():
+                start_point = (int(line.start_point[0]), int(line.start_point[1]))
+                end_point = (int(line.end_point[0]), int(line.end_point[1]))
+
+                # 라인 그리기
+                cv2.line(frame, start_point, end_point, line.color, int(line.thickness))
+
+                # 라인 이름 표시
+                mid_x = (start_point[0] + end_point[0]) // 2
+                mid_y = (start_point[1] + end_point[1]) // 2
+                cv2.putText(
+                    frame,
+                    line.name,
+                    (mid_x - 50, mid_y - 10),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.5,
+                    line.color,
+                    2,
+                )
+
+        # 2. 객체 감지 결과 그리기
         for detection in detections:
             x, y, w, h = detection.bbox
             track_id = detection.track_id
@@ -269,6 +349,39 @@ class StreamlitApp:
             cv2.circle(frame, (int(center_x), int(center_y)), 3, color, -1)
 
         return frame
+
+    def process_crossing_detection(
+        self, detections: List[DetectionResult]
+    ) -> List[CrossingEvent]:
+        """라인 교차 감지 처리"""
+        crossing_events = []
+
+        if self.crossing_detector and detections:
+            try:
+                # 각 감지된 객체에 대해 교차 검사
+                for detection in detections:
+                    events = self.crossing_detector.detect_crossing(detection)
+                    crossing_events.extend(events)
+
+                # 교차 이벤트가 있으면 카운트 업데이트
+                if crossing_events:
+                    self.crossing_count += len(crossing_events)
+                    self.recent_crossings.extend(crossing_events)
+
+                    # 최근 교차 이벤트는 최대 10개까지만 보관
+                    if len(self.recent_crossings) > 10:
+                        self.recent_crossings = self.recent_crossings[-10:]
+
+                    # 로그 출력
+                    for event in crossing_events:
+                        logger.info(
+                            f"라인 교차 감지: ID {event.track_id}, 라인 {event.line_id}, 방향 {event.direction.value}"
+                        )
+
+            except Exception as e:
+                logger.error(f"교차 감지 처리 중 오류: {e}")
+
+        return crossing_events
 
     def run_tracking(self, video_placeholder, stats_placeholder, events_placeholder):
         """트래킹 실행"""
@@ -297,10 +410,34 @@ class StreamlitApp:
             tracking_frame = self.tracker.track_frame(frame)
             logger.debug(f"감지된 객체 수: {len(tracking_frame.detections)}")
 
-            # 감지 결과 그리기
-            annotated_frame = self.draw_detections(
+            # 라인 교차 감지
+            crossing_events = self.process_crossing_detection(tracking_frame.detections)
+
+            # 감지 결과와 라인 그리기
+            annotated_frame = self.draw_detections_and_lines(
                 frame.copy(), tracking_frame.detections
             )
+
+            # 교차 이벤트 시각화 (교차점에 원 그리기)
+            for event in crossing_events:
+                crossing_point = (
+                    int(event.crossing_point[0]),
+                    int(event.crossing_point[1]),
+                )
+                # 교차점에 큰 원 그리기
+                cv2.circle(
+                    annotated_frame, crossing_point, 10, (0, 255, 255), 3
+                )  # 노란색 원
+                # 교차 방향 표시
+                cv2.putText(
+                    annotated_frame,
+                    f"CROSS: {event.direction.value.upper()}",
+                    (crossing_point[0] - 50, crossing_point[1] - 20),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.6,
+                    (0, 255, 255),
+                    2,
+                )
 
             # 프레임 정보 표시
             cv2.putText(
@@ -312,6 +449,19 @@ class StreamlitApp:
                 (0, 255, 0),  # 녹색으로 변경
                 2,
             )
+
+            # 라인 정보 표시
+            if self.line_manager:
+                line_count = self.line_manager.get_active_line_count()
+                cv2.putText(
+                    annotated_frame,
+                    f"Active Lines: {line_count}",
+                    (10, 60),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.7,
+                    (255, 255, 0),  # 시안색
+                    2,
+                )
 
             # 비디오 표시
             video_placeholder.image(
@@ -332,15 +482,28 @@ class StreamlitApp:
                 with col3:
                     st.metric("라인 교차", self.crossing_count)
 
-            # 이벤트 표시
+            # 이벤트 표시 (개선된 버전)
             with events_placeholder.container():
+                # 최근 교차 이벤트 표시
+                if self.recent_crossings:
+                    st.write("**🚨 최근 라인 교차 이벤트:**")
+                    for event in self.recent_crossings[-3:]:  # 최근 3개만 표시
+                        direction_emoji = "➡️" if event.direction.value == "in" else "⬅️"
+                        st.write(
+                            f"{direction_emoji} ID {event.track_id}: {event.line_id} "
+                            f"({event.direction.value}) - {event.get_datetime().strftime('%H:%M:%S')}"
+                        )
+
+                st.markdown("---")
+
+                # 현재 감지된 객체들
                 if tracking_frame.detections:
-                    st.write("**최근 감지된 객체들:**")
-                    for det in tracking_frame.detections[-5:]:  # 최근 5개만 표시
+                    st.write("**👁️ 현재 감지된 객체들:**")
+                    for det in tracking_frame.detections:
                         st.write(
                             f"- ID {det.track_id}: {det.class_name} (신뢰도: {det.confidence:.2f})"
                         )
-                        logger.info(
+                        logger.debug(
                             f"객체 감지: ID {det.track_id}, 클래스: {det.class_name}, 신뢰도: {det.confidence:.2f}"
                         )
                 else:
@@ -366,10 +529,13 @@ class StreamlitApp:
         self.is_running = False
         self.video_loaded = False
         self.tracker_initialized = False
+        self.lines_initialized = False
         if self.video_source:
             self.video_source.release()
             self.video_source = None
         self.tracker = None
+        self.line_manager = None
+        self.crossing_detector = None
 
     def is_ready(self):
         """시스템이 준비되었는지 확인"""
@@ -378,6 +544,9 @@ class StreamlitApp:
             and self.tracker_initialized
             and self.video_source is not None
             and self.tracker is not None
+            and self.lines_initialized
+            and self.line_manager is not None
+            and self.crossing_detector is not None
         )
 
 
@@ -453,6 +622,100 @@ def main():
 
         st.markdown("---")
 
+        # 라인 관리 섹션
+        st.subheader("📏 라인 관리")
+
+        if app.lines_initialized and app.line_manager:
+            # 현재 라인 상태 표시
+            total_lines = app.line_manager.get_line_count()
+            active_lines = app.line_manager.get_active_line_count()
+            st.write(f"**총 라인 수:** {total_lines}")
+            st.write(f"**활성 라인 수:** {active_lines}")
+
+            # 라인 목록 표시
+            if total_lines > 0:
+                st.write("**현재 라인들:**")
+                all_lines = app.line_manager.get_all_lines()
+                for line_id, line in all_lines.items():
+                    status_emoji = "🟢" if line.is_active else "🔴"
+                    color_text = f"RGB{line.color}"
+                    st.write(f"{status_emoji} {line.name} ({color_text})")
+
+                    # 라인 토글 버튼
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        if st.button(f"토글", key=f"toggle_{line_id}"):
+                            app.line_manager.toggle_line_status(line_id)
+                            st.rerun()
+                    with col2:
+                        if st.button(f"삭제", key=f"delete_{line_id}"):
+                            app.line_manager.delete_line(line_id)
+                            st.rerun()
+
+            # 새 라인 추가
+            with st.expander("➕ 새 라인 추가"):
+                line_name = st.text_input("라인 이름", value="새 라인")
+
+                col1, col2 = st.columns(2)
+                with col1:
+                    start_x = st.number_input("시작점 X", value=100, min_value=0)
+                    start_y = st.number_input("시작점 Y", value=200, min_value=0)
+                with col2:
+                    end_x = st.number_input("끝점 X", value=500, min_value=0)
+                    end_y = st.number_input("끝점 Y", value=200, min_value=0)
+
+                # 라인 색상 선택
+                color_option = st.selectbox(
+                    "라인 색상",
+                    [
+                        "녹색 (Green)",
+                        "빨간색 (Red)",
+                        "파란색 (Blue)",
+                        "노란색 (Yellow)",
+                        "보라색 (Purple)",
+                    ],
+                )
+
+                color_map = {
+                    "녹색 (Green)": (0, 255, 0),
+                    "빨간색 (Red)": (0, 0, 255),
+                    "파란색 (Blue)": (255, 0, 0),
+                    "노란색 (Yellow)": (0, 255, 255),
+                    "보라색 (Purple)": (255, 0, 255),
+                }
+
+                thickness = st.slider("라인 두께", 1, 10, 3)
+
+                if st.button("라인 추가", use_container_width=True):
+                    try:
+                        line_id = app.line_manager.create_line(
+                            name=line_name,
+                            start_point=(start_x, start_y),
+                            end_point=(end_x, end_y),
+                            color=color_map[color_option],
+                            thickness=thickness,
+                        )
+                        st.success(f"✅ 라인 '{line_name}' 추가 완료!")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"❌ 라인 추가 실패: {e}")
+
+            # 라인 초기화 버튼
+            if st.button("🗑️ 모든 라인 삭제", use_container_width=True):
+                if st.session_state.get("confirm_delete", False):
+                    app.line_manager.clear_all_lines()
+                    st.success("✅ 모든 라인이 삭제되었습니다.")
+                    st.session_state.confirm_delete = False
+                    st.rerun()
+                else:
+                    st.session_state.confirm_delete = True
+                    st.warning("⚠️ 다시 클릭하면 모든 라인이 삭제됩니다.")
+
+        else:
+            st.info("💡 트래커를 먼저 초기화해주세요.")
+
+        st.markdown("---")
+
         # 제어 버튼
         st.subheader("🎮 제어")
 
@@ -480,6 +743,9 @@ def main():
                 st.write(f"tracker_initialized: {app.tracker_initialized}")
                 st.write(f"video_source: {app.video_source is not None}")
                 st.write(f"tracker: {app.tracker is not None}")
+                st.write(f"lines_initialized: {app.lines_initialized}")
+                st.write(f"line_manager: {app.line_manager is not None}")
+                st.write(f"crossing_detector: {app.crossing_detector is not None}")
 
         col1, col2 = st.columns(2)
         with col1:

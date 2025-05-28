@@ -1,16 +1,16 @@
 {
   "version": "1.0",
   "lines": {
-    "line_4a50a104": {
-      "line_id": "line_4a50a104",
-      "name": "테스트 라인",
+    "line_001": {
+      "line_id": "line_001",
+      "name": "Main Entrance Line",
       "start_point": [
         100,
-        100
+        300
       ],
       "end_point": [
-        200,
-        200
+        500,
+        300
       ],
       "is_active": true,
       "view_type": "entrance",
@@ -21,5 +21,42 @@
         0
       ],
       "direction_config": {
-        "angle": 45.0,
-        "is_horizontal": 
+        "angle": 0.0,
+        "is_horizontal": true,
+        "is_vertical": false,
+        "auto_generated": true
+      }
+    },
+    "line_002": {
+      "line_id": "line_002",
+      "name": "Side Door Line",
+      "start_point": [
+        200,
+        100
+      ],
+      "end_point": [
+        200,
+        400
+      ],
+      "is_active": true,
+      "view_type": "entrance",
+      "thickness": 3.0,
+      "color": [
+        255,
+        0,
+        0
+      ],
+      "direction_config": {
+        "angle": 90.0,
+        "is_horizontal": false,
+        "is_vertical": true,
+        "auto_generated": true
+      }
+    }
+  },
+  "metadata": {
+    "version": "1.0",
+    "created_at": "2024-01-01T00:00:00Z",
+    "last_modified": "2024-01-01T00:00:00Z"
+  }
+}
