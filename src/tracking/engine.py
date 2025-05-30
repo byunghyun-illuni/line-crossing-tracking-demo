@@ -155,50 +155,56 @@ class ObjectTracker:
             # Update tracker
             tracks = self.tracker.update(dets, img_info, img_size)
 
-            # Convert tracks back to our format
+            # Convert tracks back to our format - 원본 detection 좌표 보존
             tracking_results = []
-            for track in tracks:
-                x1, y1, x2, y2, track_id = track
 
-                # Calculate bbox in our format (x, y, w, h)
-                x, y, w, h = int(x1), int(y1), int(x2 - x1), int(y2 - y1)
+            # 먼저 모든 detection에 대해 기본 결과 생성 (track ID 없음)
+            detection_map = {}
+            for det in detections:
+                x, y, w, h = det.bbox
                 center_x = x + w / 2
                 center_y = y + h / 2
 
-                # Find corresponding detection for class info
-                class_name = "person"
-                confidence = 0.5
-
-                # Try to match with original detections
-                for det in detections:
-                    det_x, det_y, det_w, det_h = det.bbox
-                    det_x1, det_y1, det_x2, det_y2 = (
-                        det_x,
-                        det_y,
-                        det_x + det_w,
-                        det_y + det_h,
-                    )
-
-                    # Simple overlap check
-                    if (
-                        abs(det_x1 - x1) < 50
-                        and abs(det_y1 - y1) < 50
-                        and abs(det_x2 - x2) < 50
-                        and abs(det_y2 - y2) < 50
-                    ):
-                        class_name = det.class_name
-                        confidence = det.confidence
-                        break
-
                 result = DetectionResult(
-                    track_id=int(track_id),
+                    track_id=-1,  # 기본값으로 설정
                     bbox=(x, y, w, h),
                     center_point=(center_x, center_y),
-                    confidence=confidence,
-                    class_name=class_name,
-                    timestamp=0.0,  # Will be set by caller
+                    confidence=det.confidence,
+                    class_name=det.class_name,
+                    timestamp=0.0,
                 )
+                detection_map[len(detection_map)] = result
                 tracking_results.append(result)
+
+            # tracks에서 ID 정보만 매핑
+            for track in tracks:
+                x1, y1, x2, y2, track_id = track
+
+                # 가장 가까운 detection 찾기
+                best_match_idx = -1
+                best_distance = float("inf")
+
+                for i, det in enumerate(detections):
+                    det_x, det_y, det_w, det_h = det.bbox
+                    det_center_x = det_x + det_w / 2
+                    det_center_y = det_y + det_h / 2
+
+                    track_center_x = (x1 + x2) / 2
+                    track_center_y = (y1 + y2) / 2
+
+                    # 중심점 거리 계산
+                    distance = (
+                        (det_center_x - track_center_x) ** 2
+                        + (det_center_y - track_center_y) ** 2
+                    ) ** 0.5
+
+                    if distance < best_distance and distance < 100:  # 최대 100픽셀 거리
+                        best_distance = distance
+                        best_match_idx = i
+
+                # 매칭된 detection에 track ID 할당
+                if best_match_idx >= 0 and best_match_idx < len(tracking_results):
+                    tracking_results[best_match_idx].track_id = int(track_id)
 
             return TrackingFrame(
                 frame_id=getattr(self.tracker, "frame_count", 0),

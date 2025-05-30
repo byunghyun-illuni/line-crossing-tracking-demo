@@ -1,154 +1,346 @@
 #!/usr/bin/env python3
 """
-OC-SORT 추적 시스템 테스트 스크립트
+OC-SORT 추적 시스템 테스트 스크립트 - data/people.mp4 사용
+실제 비디오 데이터로 ID 트래킹 테스트
 """
 
-import logging
 import sys
+import time
 from pathlib import Path
 
+import cv2
 import numpy as np
 
 # 프로젝트 루트를 Python 경로에 추가
 project_root = Path(__file__).parent
 sys.path.insert(0, str(project_root))
 
-# 로깅 설정
-logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-)
-
-from src.core.models import DetectionResult
+from src.tracking.detector_configs import get_config
 from src.tracking.engine import ObjectTracker
 
 
-def create_dummy_detections(frame_id: int) -> list:
-    """더미 감지 결과 생성"""
-    detections = []
+def test_tracking_on_video_frames(
+    video_path: str, frame_indices=[50, 100, 150, 200, 250]
+):
+    """비디오 특정 프레임들에서 tracking 테스트"""
 
-    # 프레임마다 약간씩 이동하는 객체들 시뮬레이션
-    base_positions = [
-        (100, 100, 150, 200),  # 객체 1
-        (300, 150, 350, 250),  # 객체 2
-        (500, 200, 550, 300),  # 객체 3
-    ]
+    print(f"🎬 비디오 추적 테스트: {video_path}")
+    print("=" * 60)
 
-    for i, (x1, y1, x2, y2) in enumerate(base_positions):
-        # 프레임마다 약간씩 이동
-        offset_x = frame_id * 2
-        offset_y = frame_id * 1
+    # 비디오 열기
+    cap = cv2.VideoCapture(video_path)
+    if not cap.isOpened():
+        print(f"❌ 비디오를 열 수 없습니다: {video_path}")
+        return
 
-        # 일부 객체는 중간에 사라지도록 설정
-        if i == 1 and 10 <= frame_id <= 15:
-            continue  # 객체 2는 10-15 프레임에서 사라짐
+    fps = cap.get(cv2.CAP_PROP_FPS)
+    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
 
-        # 바운딩 박스 계산
-        bbox_x = x1 + offset_x
-        bbox_y = y1 + offset_y
-        bbox_w = (x2 + offset_x) - bbox_x
-        bbox_h = (y2 + offset_y) - bbox_y
+    print(f"📊 비디오 정보: {width}x{height}, {fps:.1f}fps, 총 {frame_count}프레임")
 
-        # 중심점 계산
-        center_x = bbox_x + bbox_w / 2
-        center_y = bbox_y + bbox_h / 2
-
-        detection = DetectionResult(
-            track_id=i + 1,  # 임시 track_id
-            bbox=(bbox_x, bbox_y, bbox_w, bbox_h),
-            center_point=(center_x, center_y),
-            confidence=0.8 + np.random.normal(0, 0.1),
-            class_name="person",
-            timestamp=frame_id * 0.033,  # 30fps 기준
-        )
-        detections.append(detection)
-
-    return detections
-
-
-def test_ocsort_tracking():
-    """OC-SORT 추적 테스트"""
-    print("=== OC-SORT 추적 테스트 시작 ===")
-
-    # 추적기 초기화
+    # Tracker 초기화 (crowded_scene 설정 사용)
+    config = get_config("crowded_scene")
     tracker = ObjectTracker(
-        det_thresh=0.6,
-        max_age=30,
-        min_hits=3,
-        iou_threshold=0.3,
-        delta_t=3,
-        asso_func="iou",
-        inertia=0.2,
-        use_byte=False,
+        det_thresh=0.25,  # 0.6 -> 0.25로 낮춤 (더 많은 detection 허용)
+        max_age=30,  # 최대 추적 유지 프레임
+        min_hits=3,  # 추적 시작 최소 hit 수
+        iou_threshold=0.3,  # IoU threshold for association
+        delta_t=3,  # velocity calculation delta
+        asso_func="iou",  # association function
+        inertia=0.2,  # velocity inertia
+        use_byte=False,  # ByteTrack association
+        detector_config=config,  # detector config
+        enable_image_enhancement=False,
+        nms_iou_threshold=0.3,
     )
 
-    # 더미 프레임 생성 (640x480)
-    dummy_frame = np.zeros((480, 640, 3), dtype=np.uint8)
+    print(
+        f"🎯 Tracker 초기화: {config.model_name}, 검출임계값: {config.confidence_threshold}, 추적임계값: 0.25"
+    )
 
-    print(f"추적기 초기화 완료")
+    # temp 디렉토리 생성
+    Path("temp").mkdir(exist_ok=True)
 
-    # 여러 프레임에 대해 추적 수행
-    for frame_id in range(1, 21):
-        print(f"\n--- 프레임 {frame_id} ---")
+    # 각 프레임에 대해 테스트
+    for frame_idx in frame_indices:
+        if frame_idx >= frame_count:
+            print(f"⚠️  프레임 {frame_idx}는 범위를 벗어남 (최대: {frame_count})")
+            continue
 
-        # 더미 감지 결과 생성
-        detections = create_dummy_detections(frame_id)
-        print(f"감지된 객체 수: {len(detections)}")
+        print(f"\n🔍 프레임 {frame_idx} 추적 테스트...")
 
-        # 추적 수행
-        tracking_frame = tracker.track_frame(dummy_frame, detections)
+        # 특정 프레임으로 이동
+        cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
+        ret, frame = cap.read()
 
-        print(f"추적된 객체 수: {len(tracking_frame.detections)}")
+        if not ret:
+            print(f"❌ 프레임 {frame_idx}를 읽을 수 없습니다")
+            continue
 
-        # 추적 결과 출력
-        for i, detection in enumerate(tracking_frame.detections):
-            track_id = getattr(detection, "track_id", "N/A")
-            bbox = detection.bbox
-            confidence = detection.confidence
-            print(f"  객체 {i+1}: ID={track_id}, bbox={bbox}, conf={confidence:.3f}")
+        print(f"📐 프레임 크기: {frame.shape}")
 
-    print("\n=== OC-SORT 추적 테스트 완료 ===")
+        # Detection + Tracking 수행
+        start_time = time.time()
+        tracking_frame = tracker.track_frame(frame)
+        tracking_time = time.time() - start_time
+
+        print(f"⏱️  Tracking 시간: {tracking_time:.3f}초")
+        print(f"👁️  추적된 객체 수: {len(tracking_frame.detections)}")
+
+        # 신뢰도별 분류
+        high_conf = [d for d in tracking_frame.detections if d.confidence >= 0.7]
+        medium_conf = [
+            d for d in tracking_frame.detections if 0.4 <= d.confidence < 0.7
+        ]
+        low_conf = [d for d in tracking_frame.detections if d.confidence < 0.4]
+
+        print(
+            f"📊 신뢰도별 분류: 높음({len(high_conf)}) 중간({len(medium_conf)}) 낮음({len(low_conf)})"
+        )
+
+        # 바운딩 박스 유효성 체크
+        img_h, img_w = frame.shape[:2]
+        valid_count = 0
+        invalid_count = 0
+
+        for det in tracking_frame.detections:
+            x, y, w, h = det.bbox
+            if (
+                x >= 0
+                and y >= 0
+                and x + w <= img_w
+                and y + h <= img_h
+                and w > 0
+                and h > 0
+            ):
+                valid_count += 1
+            else:
+                invalid_count += 1
+
+        print(f"🔍 바운딩 박스: 유효({valid_count}) 무효({invalid_count})")
+
+        # Track ID 분석
+        track_ids = [
+            det.track_id
+            for det in tracking_frame.detections
+            if hasattr(det, "track_id") and det.track_id > 0
+        ]
+        unique_ids = set(track_ids)
+        print(
+            f"🆔 Track ID 분석: 총 {len(unique_ids)}개 고유 ID - {sorted(unique_ids)}"
+        )
+
+        # 추적 결과 출력 (상위 10개)
+        detections_sorted = sorted(
+            tracking_frame.detections, key=lambda x: x.confidence, reverse=True
+        )
+        print("📋 상위 10개 추적 결과:")
+        for i, det in enumerate(detections_sorted[:10]):
+            track_id = getattr(det, "track_id", "N/A")
+            print(
+                f"   {i+1:2d}. ID={track_id:3}, 신뢰도: {det.confidence:.3f}, 크기: {det.bbox[2]:3d}x{det.bbox[3]:3d}, 위치: ({det.bbox[0]:4d}, {det.bbox[1]:4d})"
+            )
+
+        # 결과 이미지 저장
+        annotated_frame = frame.copy()
+        drawn_count = 0
+
+        for det in tracking_frame.detections:
+            x, y, w, h = det.bbox
+            track_id = getattr(det, "track_id", -1)
+
+            # 바운딩 박스 유효성 체크
+            if x < 0 or y < 0 or x + w > img_w or y + h > img_h:
+                continue
+
+            # Track ID에 따른 색상 선택
+            if track_id > 0:
+                # Track ID를 기반으로 고유 색상 생성
+                np.random.seed(track_id)
+                color = tuple(map(int, np.random.randint(0, 255, 3)))
+                thickness = 3
+            else:
+                color = (128, 128, 128)  # 회색 - ID 없음
+                thickness = 1
+
+            # 바운딩 박스 그리기
+            cv2.rectangle(annotated_frame, (x, y), (x + w, y + h), color, thickness)
+            drawn_count += 1
+
+            # Track ID와 신뢰도 라벨
+            if track_id > 0:
+                label = f"ID{track_id}: {det.confidence:.2f}"
+            else:
+                label = f"?: {det.confidence:.2f}"
+
+            # 라벨 배경과 텍스트
+            label_size = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)[0]
+            cv2.rectangle(
+                annotated_frame, (x, y - 20), (x + label_size[0], y), color, -1
+            )
+            cv2.putText(
+                annotated_frame,
+                label,
+                (x, y - 5),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.5,
+                (255, 255, 255),
+                1,
+            )
+
+        print(f"✅ 실제로 그려진 바운딩 박스: {drawn_count}개")
+
+        # 정보 텍스트 추가
+        info_texts = [
+            f"Frame {frame_idx}: Tracking Test",
+            f"Total tracks: {len(tracking_frame.detections)}",
+            f"Valid boxes: {valid_count}",
+            f"Unique IDs: {len(unique_ids)}",
+            f"High conf: {len(high_conf)}",
+            f"Time: {tracking_time:.3f}s",
+        ]
+
+        for i, text in enumerate(info_texts):
+            cv2.putText(
+                annotated_frame,
+                text,
+                (10, 25 + i * 20),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.5,
+                (255, 255, 255),
+                1,
+                cv2.LINE_AA,
+            )
+
+        # 결과 저장
+        output_path = f"temp/tracking_frame_{frame_idx}_result.jpg"
+        cv2.imwrite(output_path, annotated_frame)
+        print(f"💾 결과 저장: {output_path}")
+
+    cap.release()
+    print("\n✅ 프레임별 추적 테스트 완료!")
 
 
-def test_detection_only():
-    """감지만 테스트 (추적 없이)"""
-    print("\n=== 감지 전용 테스트 시작 ===")
+def test_continuous_tracking(video_path: str, start_frame=100, num_frames=50):
+    """연속 프레임에서 tracking 테스트 - ID 일관성 확인"""
 
-    tracker = ObjectTracker()
+    print(f"\n🔄 연속 추적 테스트 (프레임 {start_frame}~{start_frame+num_frames-1})")
+    print("=" * 60)
 
-    # 더미 프레임 생성
-    dummy_frame = np.zeros((480, 640, 3), dtype=np.uint8)
+    cap = cv2.VideoCapture(video_path)
+    if not cap.isOpened():
+        print("❌ 비디오를 열 수 없습니다")
+        return
 
-    # HOG 감지기 테스트
-    detections = tracker.detect_objects(dummy_frame)
-    print(f"HOG 감지기로 감지된 객체 수: {len(detections)}")
+    # Tracker 초기화
+    config = get_config("crowded_scene")
+    tracker = ObjectTracker(
+        det_thresh=0.25,  # 0.6 -> 0.25로 낮춤
+        max_age=10,  # 더 짧은 max_age로 빠른 테스트
+        min_hits=2,  # 더 빠른 트랙 생성
+        iou_threshold=0.3,
+        detector_config=config,
+        enable_image_enhancement=False,
+    )
 
-    for i, detection in enumerate(detections):
-        print(f"  감지 {i+1}: bbox={detection.bbox}, conf={detection.confidence:.3f}")
+    # 시작 프레임으로 이동
+    cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
 
-    print("=== 감지 전용 테스트 완료 ===")
+    # ID 추적 통계
+    id_history = {}  # track_id: [frame_numbers]
+    frame_stats = []
 
+    print("📹 연속 프레임 추적 시작...")
 
-def main():
-    """메인 테스트 함수"""
-    try:
-        # OC-SORT 추적 테스트
-        test_ocsort_tracking()
+    for i in range(num_frames):
+        current_frame = start_frame + i
+        ret, frame = cap.read()
+        if not ret:
+            break
 
-        # 감지 전용 테스트
-        test_detection_only()
+        # Tracking 수행
+        tracking_frame = tracker.track_frame(frame)
 
-        print("\n✅ 모든 테스트가 성공적으로 완료되었습니다!")
+        # Track ID 기록
+        current_ids = set()
+        for det in tracking_frame.detections:
+            track_id = getattr(det, "track_id", -1)
+            if track_id > 0:
+                current_ids.add(track_id)
+                if track_id not in id_history:
+                    id_history[track_id] = []
+                id_history[track_id].append(current_frame)
 
-    except Exception as e:
-        print(f"\n❌ 테스트 중 오류 발생: {e}")
-        import traceback
+        # 프레임별 통계
+        frame_stats.append(
+            {
+                "frame": current_frame,
+                "total_tracks": len(tracking_frame.detections),
+                "valid_ids": len(current_ids),
+                "ids": sorted(current_ids),
+            }
+        )
 
-        traceback.print_exc()
-        return 1
+        # 10프레임마다 출력
+        if i % 10 == 0 or i < 5:
+            print(
+                f"   프레임 {current_frame}: {len(tracking_frame.detections)}개 추적, ID: {sorted(current_ids)}"
+            )
 
-    return 0
+    cap.release()
+
+    # ID 추적 분석 결과
+    print("\n📊 연속 추적 분석 결과:")
+    print(f"   처리된 프레임: {len(frame_stats)}")
+    print(f"   총 고유 ID 수: {len(id_history)}")
+
+    # ID별 지속성 분석
+    print("\n🆔 ID별 추적 지속성:")
+    for track_id, frames in sorted(id_history.items()):
+        duration = len(frames)
+        first_frame = frames[0]
+        last_frame = frames[-1]
+        print(
+            f"   ID {track_id:2d}: {duration:2d}프레임 지속 (프레임 {first_frame}~{last_frame})"
+        )
+
+    # 평균 통계
+    avg_tracks = sum(stat["total_tracks"] for stat in frame_stats) / len(frame_stats)
+    avg_valid_ids = sum(stat["valid_ids"] for stat in frame_stats) / len(frame_stats)
+
+    print("\n📈 평균 통계:")
+    print(f"   평균 추적 객체 수: {avg_tracks:.1f}개")
+    print(f"   평균 유효 ID 수: {avg_valid_ids:.1f}개")
 
 
 if __name__ == "__main__":
-    exit_code = main()
-    sys.exit(exit_code)
+    video_path = "data/people.mp4"
+
+    if not Path(video_path).exists():
+        print(f"❌ 비디오 파일을 찾을 수 없습니다: {video_path}")
+        print("📁 data 디렉토리의 파일들:")
+        for f in Path("data").glob("*.mp4"):
+            print(f"   {f}")
+        exit(1)
+
+    print("🚀 OC-SORT 추적 시스템 테스트 시작")
+    print("=" * 50)
+
+    # temp 디렉토리 생성
+    Path("temp").mkdir(exist_ok=True)
+
+    # 1. 특정 프레임들에서 추적 테스트
+    test_tracking_on_video_frames(video_path, [50, 100, 150, 200, 287])
+
+    print("\n" + "=" * 50)
+
+    # 2. 연속 프레임에서 ID 일관성 테스트
+    test_continuous_tracking(video_path, start_frame=100, num_frames=30)
+
+    print("\n🎯 결론:")
+    print("1. temp/tracking_frame_*.jpg 파일들을 확인해보세요")
+    print("2. 각 ID별로 고유한 색상으로 바운딩 박스가 그려집니다")
+    print("3. 연속 프레임에서 ID 일관성이 유지되는지 확인하세요")
+    print("4. 추적 지속성 분석 결과를 참고하세요")

@@ -74,11 +74,42 @@ def extract_and_test_frames(video_path: str, frame_indices=[10, 50, 100, 200, 30
         print(f"⏱️  Detection 시간: {detection_time:.3f}초")
         print(f"👁️  감지된 객체 수: {len(detections)}")
 
-        # 감지된 객체 정보 출력
-        for i, det in enumerate(detections):
+        # 신뢰도별 분류
+        high_conf = [d for d in detections if d.confidence >= 0.7]
+        medium_conf = [d for d in detections if 0.4 <= d.confidence < 0.7]
+        low_conf = [d for d in detections if d.confidence < 0.4]
+
+        print(
+            f"📊 신뢰도별 분류: 높음({len(high_conf)}) 중간({len(medium_conf)}) 낮음({len(low_conf)})"
+        )
+
+        # 바운딩 박스 유효성 체크
+        img_h, img_w = frame.shape[:2]
+        valid_count = 0
+        invalid_count = 0
+
+        for det in detections:
+            x, y, w, h = det.bbox
+            if (
+                x >= 0
+                and y >= 0
+                and x + w <= img_w
+                and y + h <= img_h
+                and w > 0
+                and h > 0
+            ):
+                valid_count += 1
+            else:
+                invalid_count += 1
+
+        print(f"🔍 바운딩 박스: 유효({valid_count}) 무효({invalid_count})")
+
+        # 감지된 객체 정보 출력 (상위 10개만)
+        detections_sorted = sorted(detections, key=lambda x: x.confidence, reverse=True)
+        print("📋 상위 10개 감지 결과:")
+        for i, det in enumerate(detections_sorted[:10]):
             print(
-                f"   {i+1}. 클래스: {det.class_name}, 신뢰도: {det.confidence:.3f}, "
-                f"위치: {det.center_point}, 크기: {det.bbox[2]}x{det.bbox[3]}"
+                f"   {i+1:2d}. 신뢰도: {det.confidence:.3f}, 크기: {det.bbox[2]:3d}x{det.bbox[3]:3d}, 위치: ({det.bbox[0]:4d}, {det.bbox[1]:4d})"
             )
 
         # 결과 이미지 저장
@@ -118,17 +149,17 @@ def extract_and_test_frames(video_path: str, frame_indices=[10, 50, 100, 200, 30
         print(f"💾 결과 저장: {output_path}")
 
     cap.release()
-    print(f"\n✅ 테스트 완료!")
+    print("\n✅ 테스트 완료!")
 
 
 def compare_continuous_vs_jump_frames(video_path: str):
     """연속 프레임 vs 점프 프레임 비교"""
 
-    print(f"🔄 연속 vs 점프 프레임 비교 테스트")
+    print("🔄 연속 vs 점프 프레임 비교 테스트")
 
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
-        print(f"❌ 비디오를 열 수 없습니다")
+        print("❌ 비디오를 열 수 없습니다")
         return
 
     # Detector 초기화
@@ -139,7 +170,7 @@ def compare_continuous_vs_jump_frames(video_path: str):
         enable_image_enhancement=True,
     )
 
-    print(f"\n📹 연속 프레임 읽기 테스트 (프레임 100-110)")
+    print("\n📹 연속 프레임 읽기 테스트 (프레임 100-110)")
     total_detections_continuous = 0
 
     # 연속으로 프레임 읽기
@@ -155,7 +186,7 @@ def compare_continuous_vs_jump_frames(video_path: str):
 
     print(f"📊 연속 읽기 총 감지: {total_detections_continuous}개")
 
-    print(f"\n🦘 점프 프레임 읽기 테스트 (100, 200, 300...)")
+    print("\n🦘 점프 프레임 읽기 테스트 (100, 200, 300...)")
     total_detections_jump = 0
 
     # 점프해서 프레임 읽기
@@ -179,13 +210,16 @@ if __name__ == "__main__":
 
     if not Path(video_path).exists():
         print(f"❌ 비디오 파일을 찾을 수 없습니다: {video_path}")
-        print("📁 현재 디렉토리의 파일들:")
-        for f in Path(".").glob("*.mp4"):
+        print("📁 data 디렉토리의 파일들:")
+        for f in Path("data").glob("*.mp4"):
             print(f"   {f}")
         exit(1)
 
     print("🚀 비디오 프레임 디버깅 시작")
     print("=" * 50)
+
+    # temp 디렉토리 생성
+    Path("temp").mkdir(exist_ok=True)
 
     # 1. 특정 프레임들 추출해서 테스트
     extract_and_test_frames(video_path, [50, 100, 200, 287, 400])
@@ -195,7 +229,7 @@ if __name__ == "__main__":
     # 2. 연속 vs 점프 프레임 비교
     compare_continuous_vs_jump_frames(video_path)
 
-    print(f"\n🎯 결론:")
-    print(f"1. temp/debug_frame_*.jpg 파일들을 확인해보세요")
-    print(f"2. 연속 읽기 vs 점프 읽기 결과를 비교해보세요")
-    print(f"3. Streamlit에서는 연속 읽기를 하므로 차이가 있을 수 있습니다")
+    print("\n🎯 결론:")
+    print("1. temp/debug_frame_*.jpg 파일들을 확인해보세요")
+    print("2. 연속 읽기 vs 점프 읽기 결과를 비교해보세요")
+    print("3. Streamlit에서는 연속 읽기를 하므로 차이가 있을 수 있습니다")

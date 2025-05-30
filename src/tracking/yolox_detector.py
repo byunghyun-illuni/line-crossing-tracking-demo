@@ -204,7 +204,7 @@ class YOLOXDetector:
             logger.error(f"Failed to load model {model_name}: {e}")
             raise
 
-    def _preprocess_frame(self, frame: np.ndarray) -> torch.Tensor:
+    def _preprocess_frame(self, frame: np.ndarray) -> Tuple[torch.Tensor, float]:
         """
         Preprocess frame for model input with enhanced scaling.
 
@@ -212,27 +212,38 @@ class YOLOXDetector:
             frame: Input frame in BGR format
 
         Returns:
-            Preprocessed tensor
+            Tuple of (preprocessed tensor, scale_factor)
         """
         # Convert BGR to RGB
         frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
+        # 원본 크기 저장
+        original_height, original_width = frame_rgb.shape[:2]
+        scale_factor = 1.0
+
         # 해상도가 낮으면 업스케일링 (작은 객체 감지 개선)
-        height, width = frame_rgb.shape[:2]
-        if width < self.SMALL_IMAGE_THRESHOLD or height < self.SMALL_IMAGE_THRESHOLD:
+        if (
+            original_width < self.SMALL_IMAGE_THRESHOLD
+            or original_height < self.SMALL_IMAGE_THRESHOLD
+        ):
             # 작은 이미지는 확대
-            new_width = int(width * self.SCALE_FACTOR)
-            new_height = int(height * self.SCALE_FACTOR)
+            scale_factor = self.SCALE_FACTOR
+            new_width = int(original_width * scale_factor)
+            new_height = int(original_height * scale_factor)
             frame_rgb = cv2.resize(
                 frame_rgb, (new_width, new_height), interpolation=cv2.INTER_CUBIC
             )
-        elif width > self.LARGE_IMAGE_THRESHOLD or height > self.LARGE_IMAGE_THRESHOLD:
+        elif (
+            original_width > self.LARGE_IMAGE_THRESHOLD
+            or original_height > self.LARGE_IMAGE_THRESHOLD
+        ):
             # 너무 큰 이미지는 축소 (처리 속도 개선)
             scale_factor = min(
-                self.LARGE_IMAGE_THRESHOLD / width, self.LARGE_IMAGE_THRESHOLD / height
+                self.LARGE_IMAGE_THRESHOLD / original_width,
+                self.LARGE_IMAGE_THRESHOLD / original_height,
             )
-            new_width = int(width * scale_factor)
-            new_height = int(height * scale_factor)
+            new_width = int(original_width * scale_factor)
+            new_height = int(original_height * scale_factor)
             frame_rgb = cv2.resize(
                 frame_rgb, (new_width, new_height), interpolation=cv2.INTER_AREA
             )
@@ -246,7 +257,7 @@ class YOLOXDetector:
         )
 
         tensor = transform(frame_rgb)
-        return tensor
+        return tensor, scale_factor
 
     def detect_objects(self, frame: np.ndarray) -> List[DetectionResult]:
         """
@@ -265,8 +276,8 @@ class YOLOXDetector:
             else:
                 enhanced_frame = frame
 
-            # Preprocess frame
-            input_tensor = self._preprocess_frame(enhanced_frame)
+            # Preprocess frame (이제 scale_factor도 반환)
+            input_tensor, scale_factor = self._preprocess_frame(enhanced_frame)
             input_tensor = input_tensor.unsqueeze(0).to(self.device)
 
             # Run inference
@@ -299,11 +310,17 @@ class YOLOXDetector:
                     continue
 
                 # Convert box format (x1, y1, x2, y2) to (x, y, w, h)
-                x1, y1, x2, y2 = box
+                # 중요: scale_factor로 원본 이미지 좌표로 변환
+                x1, y1, x2, y2 = box / scale_factor
                 x, y, w, h = int(x1), int(y1), int(x2 - x1), int(y2 - y1)
 
                 # 최소 바운딩 박스 크기 검증
                 if w < self.DEFAULT_MIN_BOX_WIDTH or h < self.DEFAULT_MIN_BOX_HEIGHT:
+                    continue
+
+                # 이미지 경계 체크 (원본 이미지 크기 기준)
+                orig_height, orig_width = frame.shape[:2]
+                if x < 0 or y < 0 or x + w > orig_width or y + h > orig_height:
                     continue
 
                 # Calculate center point
@@ -327,7 +344,9 @@ class YOLOXDetector:
                 )
                 detections.append(detection)
 
-            logger.debug(f"Detected {len(detections)} objects (enhanced pipeline)")
+            logger.debug(
+                f"Detected {len(detections)} objects (scale_factor: {scale_factor:.2f})"
+            )
             return detections
 
         except Exception as e:
