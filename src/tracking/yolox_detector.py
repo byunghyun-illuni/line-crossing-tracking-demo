@@ -11,6 +11,7 @@ import numpy as np
 import torch
 import torchvision.transforms as transforms
 from torchvision.models import detection
+from torchvision.ops import nms  # NMS 추가
 
 from ..core.models import DetectionResult
 
@@ -23,12 +24,31 @@ class YOLOXDetector:
     This replaces the slow HOGDescriptor with a modern, fast detector.
     """
 
+    # 검출 관련 상수들
+    DEFAULT_MIN_CONFIDENCE = 0.2
+    DEFAULT_CONFIDENCE_MARGIN = 0.2
+    DEFAULT_MIN_BOX_WIDTH = 10
+    DEFAULT_MIN_BOX_HEIGHT = 20
+    DEFAULT_NMS_IOU_THRESHOLD = 0.4
+
+    # 이미지 처리 관련 상수들
+    SMALL_IMAGE_THRESHOLD = 800
+    LARGE_IMAGE_THRESHOLD = 1920
+    SCALE_FACTOR = 2.0
+    CLAHE_CLIP_LIMIT = 2.0
+    CLAHE_TILE_SIZE = (8, 8)
+    SHARPEN_WEIGHT = 0.3
+    ENHANCE_WEIGHT = 0.7
+
     def __init__(
         self,
         model_name: str = "fasterrcnn_resnet50_fpn",
         confidence_threshold: float = 0.6,
         device: Optional[str] = None,
         target_classes: Optional[List[str]] = None,
+        # 핵심 설정만 파라미터로 노출
+        enable_image_enhancement: bool = False,
+        nms_iou_threshold: Optional[float] = None,
     ):
         """
         Initialize YOLOX detector.
@@ -38,9 +58,13 @@ class YOLOXDetector:
             confidence_threshold: Minimum confidence for detections
             device: Device to run inference on (auto-detected if None)
             target_classes: List of class names to detect (None for all COCO classes)
+            enable_image_enhancement: Whether to apply image enhancement for better small object detection
+            nms_iou_threshold: IoU threshold for NMS (uses default if None)
         """
         self.confidence_threshold = confidence_threshold
         self.target_classes = target_classes or ["person"]
+        self.enable_image_enhancement = enable_image_enhancement
+        self.nms_iou_threshold = nms_iou_threshold or self.DEFAULT_NMS_IOU_THRESHOLD
 
         # Auto-detect device
         if device is None:
@@ -182,7 +206,7 @@ class YOLOXDetector:
 
     def _preprocess_frame(self, frame: np.ndarray) -> torch.Tensor:
         """
-        Preprocess frame for model input.
+        Preprocess frame for model input with enhanced scaling.
 
         Args:
             frame: Input frame in BGR format
@@ -192,6 +216,26 @@ class YOLOXDetector:
         """
         # Convert BGR to RGB
         frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+
+        # 해상도가 낮으면 업스케일링 (작은 객체 감지 개선)
+        height, width = frame_rgb.shape[:2]
+        if width < self.SMALL_IMAGE_THRESHOLD or height < self.SMALL_IMAGE_THRESHOLD:
+            # 작은 이미지는 확대
+            new_width = int(width * self.SCALE_FACTOR)
+            new_height = int(height * self.SCALE_FACTOR)
+            frame_rgb = cv2.resize(
+                frame_rgb, (new_width, new_height), interpolation=cv2.INTER_CUBIC
+            )
+        elif width > self.LARGE_IMAGE_THRESHOLD or height > self.LARGE_IMAGE_THRESHOLD:
+            # 너무 큰 이미지는 축소 (처리 속도 개선)
+            scale_factor = min(
+                self.LARGE_IMAGE_THRESHOLD / width, self.LARGE_IMAGE_THRESHOLD / height
+            )
+            new_width = int(width * scale_factor)
+            new_height = int(height * scale_factor)
+            frame_rgb = cv2.resize(
+                frame_rgb, (new_width, new_height), interpolation=cv2.INTER_AREA
+            )
 
         # Convert to tensor and normalize
         transform = transforms.Compose(
@@ -206,7 +250,7 @@ class YOLOXDetector:
 
     def detect_objects(self, frame: np.ndarray) -> List[DetectionResult]:
         """
-        Detect objects in frame using YOLOX.
+        Detect objects in frame using YOLOX with enhanced processing.
 
         Args:
             frame: Input frame in BGR format
@@ -215,8 +259,14 @@ class YOLOXDetector:
             List of detection results
         """
         try:
+            # 이미지 품질 향상 (선택적 적용)
+            if self.enable_image_enhancement:
+                enhanced_frame = self._enhance_small_objects(frame)
+            else:
+                enhanced_frame = frame
+
             # Preprocess frame
-            input_tensor = self._preprocess_frame(frame)
+            input_tensor = self._preprocess_frame(enhanced_frame)
             input_tensor = input_tensor.unsqueeze(0).to(self.device)
 
             # Run inference
@@ -231,9 +281,17 @@ class YOLOXDetector:
             scores = pred["scores"].cpu().numpy()
             labels = pred["labels"].cpu().numpy()
 
-            # Filter by confidence and target classes
+            # 커스텀 NMS 적용
+            boxes, scores, labels = self._apply_custom_nms(boxes, scores, labels)
+
+            # 더 관대한 필터링을 위한 개선된 로직
             for i, (box, score, label) in enumerate(zip(boxes, scores, labels)):
-                if score < self.confidence_threshold:
+                # 동적 신뢰도 임계값 계산
+                min_threshold = max(
+                    self.DEFAULT_MIN_CONFIDENCE,
+                    self.confidence_threshold - self.DEFAULT_CONFIDENCE_MARGIN,
+                )
+                if score < min_threshold:
                     continue
 
                 # Check if this is a target class
@@ -243,6 +301,10 @@ class YOLOXDetector:
                 # Convert box format (x1, y1, x2, y2) to (x, y, w, h)
                 x1, y1, x2, y2 = box
                 x, y, w, h = int(x1), int(y1), int(x2 - x1), int(y2 - y1)
+
+                # 최소 바운딩 박스 크기 검증
+                if w < self.DEFAULT_MIN_BOX_WIDTH or h < self.DEFAULT_MIN_BOX_HEIGHT:
+                    continue
 
                 # Calculate center point
                 center_x = x + w / 2
@@ -265,7 +327,7 @@ class YOLOXDetector:
                 )
                 detections.append(detection)
 
-            logger.debug(f"Detected {len(detections)} objects")
+            logger.debug(f"Detected {len(detections)} objects (enhanced pipeline)")
             return detections
 
         except Exception as e:
@@ -290,3 +352,69 @@ class YOLOXDetector:
             logger.info("YOLOX detector warmup completed")
         except Exception as e:
             logger.warning(f"Warmup failed: {e}")
+
+    def _apply_custom_nms(
+        self,
+        boxes: np.ndarray,
+        scores: np.ndarray,
+        labels: np.ndarray,
+        iou_threshold: Optional[float] = None,
+    ) -> tuple:
+        """
+        커스텀 NMS 적용으로 겹치는 감지 결과 정리
+
+        Args:
+            boxes: 바운딩 박스 배열 (N, 4)
+            scores: 신뢰도 점수 (N,)
+            labels: 클래스 라벨 (N,)
+            iou_threshold: IoU 임계값 (None이면 인스턴스 설정 사용)
+
+        Returns:
+            필터링된 (boxes, scores, labels)
+        """
+        if len(boxes) == 0:
+            return boxes, scores, labels
+
+        # Use instance setting or provided threshold
+        threshold = iou_threshold or self.nms_iou_threshold
+
+        # Convert to torch tensors
+        boxes_tensor = torch.from_numpy(boxes).float()
+        scores_tensor = torch.from_numpy(scores).float()
+
+        # Apply NMS
+        keep_indices = nms(boxes_tensor, scores_tensor, threshold)
+        keep_indices = keep_indices.numpy()
+
+        return boxes[keep_indices], scores[keep_indices], labels[keep_indices]
+
+    def _enhance_small_objects(self, frame: np.ndarray) -> np.ndarray:
+        """
+        작은 객체 감지 향상을 위한 이미지 전처리
+
+        Args:
+            frame: 입력 프레임
+
+        Returns:
+            향상된 프레임
+        """
+        # 대비 향상
+        lab = cv2.cvtColor(frame, cv2.COLOR_BGR2LAB)
+        l, a, b = cv2.split(lab)
+        clahe = cv2.createCLAHE(
+            clipLimit=self.CLAHE_CLIP_LIMIT, tileGridSize=self.CLAHE_TILE_SIZE
+        )
+        l = clahe.apply(l)
+        enhanced = cv2.merge([l, a, b])
+        enhanced = cv2.cvtColor(enhanced, cv2.COLOR_LAB2BGR)
+
+        # 샤프닝 필터 적용
+        kernel = np.array([[-1, -1, -1], [-1, 9, -1], [-1, -1, -1]])
+        sharpened = cv2.filter2D(enhanced, -1, kernel)
+
+        # 원본과 블렌딩
+        result = cv2.addWeighted(
+            enhanced, self.ENHANCE_WEIGHT, sharpened, self.SHARPEN_WEIGHT, 0
+        )
+
+        return result

@@ -9,6 +9,7 @@ import os
 import sys
 import tempfile
 import time
+import warnings
 from pathlib import Path
 from typing import List, Optional
 
@@ -22,10 +23,20 @@ logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     handlers=[
         logging.StreamHandler(sys.stdout),
-        logging.FileHandler("streamlit_app.log"),
+        logging.FileHandler("streamlit_app.log", encoding="utf-8"),  # UTF-8 인코딩 명시
     ],
 )
 logger = logging.getLogger(__name__)
+
+# Windows 한글 출력 문제 해결
+if sys.platform.startswith("win"):
+    import os
+
+    os.environ["PYTHONIOENCODING"] = "utf-8"
+
+# PyTorch 호환성 경고 억제
+warnings.filterwarnings("ignore", category=UserWarning, module="torch")
+warnings.filterwarnings("ignore", message=".*torch.classes.*")
 
 # macOS 카메라 권한 문제 해결을 위한 환경 변수 설정
 os.environ["OPENCV_AVFOUNDATION_SKIP_AUTH"] = "1"
@@ -112,7 +123,7 @@ class StreamlitApp:
             logger.error(f"기본 라인 생성 실패: {e}")
 
     def initialize_tracker(
-        self, confidence_threshold: float, detector_config: str = "balanced"
+        self, confidence_threshold: float, detector_config: str = "crowded_scene"
     ):
         """트래커 초기화 (YOLOX 검출기 포함)"""
         try:
@@ -120,11 +131,20 @@ class StreamlitApp:
                 f"트래커 초기화 중... (검출기: {detector_config}, 신뢰도: {confidence_threshold})"
             )
 
+            # 쇼핑몰 같은 복잡한 환경에서는 이미지 향상 활성화
+            enable_enhancement = detector_config in ["crowded_scene", "high_precision"]
+
             self.tracker = ObjectTracker(
-                det_thresh=confidence_threshold, detector_config=detector_config
+                det_thresh=confidence_threshold,
+                detector_config=detector_config,
+                detector_confidence=confidence_threshold,
+                enable_image_enhancement=enable_enhancement,  # 이미지 향상 활성화
+                nms_iou_threshold=0.3,  # 더 관대한 NMS
             )
             self.tracker_initialized = True
-            logger.info(f"트래커 초기화 완료 (YOLOX {detector_config} 검출기)")
+            logger.info(
+                f"트래커 초기화 완료 (YOLOX {detector_config} 검출기, 향상: {enable_enhancement})"
+            )
 
             # 라인 시스템도 함께 초기화
             if not self.lines_initialized:
@@ -139,7 +159,7 @@ class StreamlitApp:
         self,
         uploaded_file,
         confidence_threshold: float,
-        detector_config: str = "balanced",
+        detector_config: str = "crowded_scene",
     ):
         """비디오 파일 처리"""
         try:
@@ -258,7 +278,7 @@ class StreamlitApp:
         self,
         camera_id: int,
         confidence_threshold: float = 0.6,
-        detector_config: str = "balanced",
+        detector_config: str = "crowded_scene",
     ):
         """카메라 처리"""
         try:
@@ -395,6 +415,14 @@ class StreamlitApp:
         # 프레임 처리 루프
         frame_container = st.container()
 
+        # 성능 최적화를 위한 변수들
+        frame_skip = 5  # 매 5번째 프레임만 처리 (더 공격적)
+        process_frame_count = 0
+        last_update_time = time.time()
+        update_interval = 0.5  # UI 업데이트 간격을 0.5초로 늘림 (더 적은 업데이트)
+        last_detection_time = 0
+        detection_interval = 0.1  # Detection은 0.1초마다
+
         while self.is_running:
             success, frame = self.video_source.read_frame()
 
@@ -404,123 +432,152 @@ class StreamlitApp:
                 self.is_running = False
                 break
 
-            logger.debug(f"프레임 {self.frame_count} 처리 중")
-
-            # 트래킹 수행
-            tracking_frame = self.tracker.track_frame(frame)
-            logger.debug(f"감지된 객체 수: {len(tracking_frame.detections)}")
-
-            # 라인 교차 감지
-            crossing_events = self.process_crossing_detection(tracking_frame.detections)
-
-            # 감지 결과와 라인 그리기
-            annotated_frame = self.draw_detections_and_lines(
-                frame.copy(), tracking_frame.detections
-            )
-
-            # 교차 이벤트 시각화 (교차점에 원 그리기)
-            for event in crossing_events:
-                crossing_point = (
-                    int(event.crossing_point[0]),
-                    int(event.crossing_point[1]),
-                )
-                # 교차점에 큰 원 그리기
-                cv2.circle(
-                    annotated_frame, crossing_point, 10, (0, 255, 255), 3
-                )  # 노란색 원
-                # 교차 방향 표시
-                cv2.putText(
-                    annotated_frame,
-                    f"CROSS: {event.direction.value.upper()}",
-                    (crossing_point[0] - 50, crossing_point[1] - 20),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.6,
-                    (0, 255, 255),
-                    2,
-                )
-
-            # 프레임 정보 표시
-            cv2.putText(
-                annotated_frame,
-                f"Frame: {self.frame_count}",
-                (10, 30),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                1,
-                (0, 255, 0),  # 녹색으로 변경
-                2,
-            )
-
-            # 라인 정보 표시
-            if self.line_manager:
-                line_count = self.line_manager.get_active_line_count()
-                cv2.putText(
-                    annotated_frame,
-                    f"Active Lines: {line_count}",
-                    (10, 60),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.7,
-                    (255, 255, 0),  # 시안색
-                    2,
-                )
-
-            # 비디오 표시
-            video_placeholder.image(
-                annotated_frame, channels="BGR", use_container_width=True
-            )
-
-            # 통계 업데이트
             self.frame_count += 1
-            self.detection_count += len(tracking_frame.detections)
 
-            # 통계 표시
-            with stats_placeholder.container():
-                col1, col2, col3 = st.columns(3)
-                with col1:
-                    st.metric("프레임", self.frame_count)
-                with col2:
-                    st.metric("총 감지", self.detection_count)
-                with col3:
-                    st.metric("라인 교차", self.crossing_count)
+            # 프레임 스킵으로 성능 향상
+            if self.frame_count % frame_skip != 0:
+                continue
 
-            # 이벤트 표시 (개선된 버전)
-            with events_placeholder.container():
-                # 최근 교차 이벤트 표시
-                if self.recent_crossings:
-                    st.write("**🚨 최근 라인 교차 이벤트:**")
-                    for event in self.recent_crossings[-3:]:  # 최근 3개만 표시
-                        direction_emoji = "➡️" if event.direction.value == "in" else "⬅️"
-                        st.write(
-                            f"{direction_emoji} ID {event.track_id}: {event.line_id} "
-                            f"({event.direction.value}) - {event.get_datetime().strftime('%H:%M:%S')}"
-                        )
+            process_frame_count += 1
+            logger.debug(
+                f"프레임 {self.frame_count} 처리 중 (처리된 프레임: {process_frame_count})"
+            )
 
-                st.markdown("---")
+            # 트래킹 수행 (가벼운 처리)
+            current_time = time.time()
 
-                # 현재 감지된 객체들
-                if tracking_frame.detections:
-                    st.write("**👁️ 현재 감지된 객체들:**")
-                    for det in tracking_frame.detections:
-                        st.write(
-                            f"- ID {det.track_id}: {det.class_name} (신뢰도: {det.confidence:.2f})"
-                        )
-                        logger.debug(
-                            f"객체 감지: ID {det.track_id}, 클래스: {det.class_name}, 신뢰도: {det.confidence:.2f}"
-                        )
-                else:
-                    st.write("감지된 객체가 없습니다.")
+            # Detection은 더 자주, UI 업데이트는 덜 자주
+            if current_time - last_detection_time >= detection_interval:
+                try:
+                    tracking_frame = self.tracker.track_frame(frame)
+                    logger.debug(f"감지된 객체 수: {len(tracking_frame.detections)}")
 
-            # 프레임 레이트 조절 (비디오 파일의 경우)
-            if hasattr(self.video_source, "get_fps"):
-                fps = self.video_source.get_fps()
-                if fps > 0:
-                    time.sleep(1.0 / fps)
-                else:
-                    time.sleep(0.03)  # 기본 30 FPS
+                    # 라인 교차 감지
+                    crossing_events = self.process_crossing_detection(
+                        tracking_frame.detections
+                    )
+
+                    # 감지 수 업데이트
+                    self.detection_count += len(tracking_frame.detections)
+
+                    last_detection_time = current_time
+
+                except Exception as e:
+                    logger.error(f"프레임 처리 중 오류: {e}")
+                    continue
             else:
-                time.sleep(0.03)
+                # Detection을 스킵하고 기존 결과 사용
+                tracking_frame = None
+                crossing_events = []
 
-            # Streamlit 업데이트를 위한 짧은 대기
-            time.sleep(0.01)
+            # UI 업데이트 (더 적게)
+            if current_time - last_update_time >= update_interval:
+
+                if tracking_frame is not None:
+                    # 감지 결과와 라인 그리기
+                    annotated_frame = self.draw_detections_and_lines(
+                        frame.copy(), tracking_frame.detections
+                    )
+
+                    # 교차 이벤트 시각화 (교차점에 원 그리기)
+                    for event in crossing_events:
+                        crossing_point = (
+                            int(event.crossing_point[0]),
+                            int(event.crossing_point[1]),
+                        )
+                        # 교차점에 큰 원 그리기
+                        cv2.circle(
+                            annotated_frame, crossing_point, 10, (0, 255, 255), 3
+                        )  # 노란색 원
+                        # 교차 방향 표시
+                        cv2.putText(
+                            annotated_frame,
+                            f"CROSS: {event.direction.value.upper()}",
+                            (crossing_point[0] - 50, crossing_point[1] - 20),
+                            cv2.FONT_HERSHEY_SIMPLEX,
+                            0.6,
+                            (0, 255, 255),
+                            2,
+                        )
+                else:
+                    # Detection 결과가 없으면 원본 프레임 사용
+                    annotated_frame = frame.copy()
+
+                # 프레임 정보 표시
+                cv2.putText(
+                    annotated_frame,
+                    f"Frame: {self.frame_count}",
+                    (10, 30),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    1,
+                    (0, 255, 0),  # 녹색으로 변경
+                    2,
+                )
+
+                # 라인 정보 표시
+                if self.line_manager:
+                    line_count = self.line_manager.get_active_line_count()
+                    cv2.putText(
+                        annotated_frame,
+                        f"Active Lines: {line_count}",
+                        (10, 60),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.7,
+                        (255, 255, 0),  # 시안색
+                        2,
+                    )
+
+                # 성능 정보 표시
+                fps_text = f"Processing every {frame_skip} frames, UI update: {update_interval}s"
+                cv2.putText(
+                    annotated_frame,
+                    fps_text,
+                    (10, 90),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.5,
+                    (255, 0, 255),  # 보라색
+                    1,
+                )
+
+                # 비디오 표시
+                video_placeholder.image(
+                    annotated_frame, channels="BGR", use_container_width=True
+                )
+
+                # 통계 표시
+                with stats_placeholder.container():
+                    col1, col2, col3 = st.columns(3)
+                    with col1:
+                        st.metric("프레임", self.frame_count)
+                    with col2:
+                        st.metric("총 감지", self.detection_count)
+                    with col3:
+                        st.metric("라인 교차", self.crossing_count)
+
+                # 이벤트 표시 (더 간단하게)
+                with events_placeholder.container():
+                    # 최근 교차 이벤트만 간단히 표시
+                    if self.recent_crossings:
+                        st.write("**🚨 최근 교차:**")
+                        for event in self.recent_crossings[-2:]:  # 최근 2개만
+                            direction_emoji = (
+                                "➡️" if event.direction.value == "in" else "⬅️"
+                            )
+                            st.write(
+                                f"{direction_emoji} ID {event.track_id}: {event.line_id}"
+                            )
+
+                    # 현재 감지된 객체들 (간단하게)
+                    if tracking_frame and tracking_frame.detections:
+                        detection_count = len(tracking_frame.detections)
+                        st.write(f"**👁️ 현재 감지: {detection_count}명**")
+                    else:
+                        st.write("**👁️ 감지된 객체 없음**")
+
+                last_update_time = current_time
+
+            # 더 빠른 프레임 레이트
+            time.sleep(0.005)  # 5ms로 더욱 단축
 
         logger.info("트래킹 종료")
 
@@ -568,8 +625,18 @@ def main():
 
         # 추적 설정
         st.subheader("🎯 추적 설정")
-        confidence_threshold = st.slider("신뢰도 임계값", 0.1, 1.0, 0.6, 0.1)
-        detector_config = st.selectbox("검출기 설정", list_configs())
+        confidence_threshold = st.slider("신뢰도 임계값", 0.1, 1.0, 0.4, 0.1)
+        detector_config = st.selectbox(
+            "검출기 설정",
+            list(list_configs().keys()),
+            index=list(list_configs().keys()).index(
+                "crowded_scene"
+            ),  # crowded_scene을 기본값으로
+        )
+
+        # 설정 설명 표시
+        config_descriptions = list_configs()
+        st.info(f"💡 {config_descriptions[detector_config]}")
 
         st.markdown("---")
 

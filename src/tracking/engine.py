@@ -37,6 +37,8 @@ class ObjectTracker:
         detector_confidence: Optional[float] = None,
         target_classes: Optional[List[str]] = None,
         device: Optional[str] = None,
+        enable_image_enhancement: bool = False,
+        nms_iou_threshold: Optional[float] = None,
     ):
         """
         Initialize OC-SORT tracker with YOLOX detector.
@@ -55,6 +57,8 @@ class ObjectTracker:
             detector_confidence: Confidence threshold for detector (overrides config)
             target_classes: List of class names to detect (overrides config)
             device: Device for detector inference (overrides config)
+            enable_image_enhancement: Whether to enable image enhancement
+            nms_iou_threshold: Non-maximum suppression IOU threshold
         """
         self.tracker = OCSort(
             det_thresh=det_thresh,
@@ -81,6 +85,8 @@ class ObjectTracker:
                 or config.confidence_threshold,
                 "target_classes": target_classes or config.target_classes,
                 "device": device or config.device,
+                "enable_image_enhancement": enable_image_enhancement,
+                "nms_iou_threshold": nms_iou_threshold,
             }
         else:
             # Use default values or provided parameters
@@ -89,6 +95,8 @@ class ObjectTracker:
                 "confidence_threshold": detector_confidence or 0.6,
                 "target_classes": target_classes or ["person"],
                 "device": device,
+                "enable_image_enhancement": enable_image_enhancement,
+                "nms_iou_threshold": nms_iou_threshold,
             }
 
         # Initialize YOLOX detector (replaces HOGDescriptor)

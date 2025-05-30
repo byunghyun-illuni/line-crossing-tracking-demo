@@ -55,9 +55,25 @@ BALANCED_CONFIG = DetectorConfig(
 # Accurate configuration - optimized for accuracy
 ACCURATE_CONFIG = DetectorConfig(
     model_name="retinanet_resnet50_fpn",
-    confidence_threshold=0.7,
+    confidence_threshold=0.5,
     target_classes=["person"],
     description="Accurate detector optimized for precision",
+)
+
+# 새로운 고성능 설정 추가
+HIGH_PRECISION_CONFIG = DetectorConfig(
+    model_name="fasterrcnn_resnet50_fpn",
+    confidence_threshold=0.4,
+    target_classes=["person"],
+    description="High precision detector for crowded scenes",
+)
+
+# 복잡한 환경용 설정
+CROWDED_SCENE_CONFIG = DetectorConfig(
+    model_name="retinanet_resnet50_fpn",
+    confidence_threshold=0.25,
+    target_classes=["person"],
+    description="Optimized for crowded and complex scenes like malls (임계값 0.25)",
 )
 
 # Multi-class configuration - detects multiple object types
@@ -94,6 +110,8 @@ def get_config(config_name: str) -> DetectorConfig:
         "fast": FAST_CONFIG,
         "balanced": BALANCED_CONFIG,
         "accurate": ACCURATE_CONFIG,
+        "high_precision": HIGH_PRECISION_CONFIG,
+        "crowded_scene": CROWDED_SCENE_CONFIG,
         "multiclass": MULTICLASS_CONFIG,
         "coco": COCO_CONFIG,
     }
@@ -117,7 +135,9 @@ def list_configs() -> Dict[str, str]:
     return {
         "fast": "Fast detector optimized for real-time performance",
         "balanced": "Balanced detector for good speed and accuracy",
-        "accurate": "Accurate detector optimized for precision",
+        "accurate": "Accurate detector optimized for precision (낮은 임계값)",
+        "high_precision": "High precision detector for crowded scenes (임계값 0.4)",
+        "crowded_scene": "Optimized for crowded and complex scenes like malls (임계값 0.25)",
         "multiclass": "Multi-class detector for various objects",
         "coco": "Full COCO detector for all object classes",
     }
