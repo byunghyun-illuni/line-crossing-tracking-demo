@@ -113,7 +113,7 @@ def extract_and_test_frames(video_path: str, frame_indices=[10, 50, 100, 200, 30
         )
 
         # 결과 저장
-        output_path = f"debug_frame_{frame_idx}_result.jpg"
+        output_path = f"temp/debug_frame_{frame_idx}_result.jpg"
         cv2.imwrite(output_path, annotated_frame)
         print(f"💾 결과 저장: {output_path}")
 
@@ -196,6 +196,6 @@ if __name__ == "__main__":
     compare_continuous_vs_jump_frames(video_path)
 
     print(f"\n🎯 결론:")
-    print(f"1. debug_frame_*.jpg 파일들을 확인해보세요")
+    print(f"1. temp/debug_frame_*.jpg 파일들을 확인해보세요")
     print(f"2. 연속 읽기 vs 점프 읽기 결과를 비교해보세요")
     print(f"3. Streamlit에서는 연속 읽기를 하므로 차이가 있을 수 있습니다")

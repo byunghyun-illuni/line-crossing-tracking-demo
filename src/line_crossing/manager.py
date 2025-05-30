@@ -10,9 +10,9 @@ import uuid
 from pathlib import Path
 from typing import Dict, Optional
 
-from ..core.config import LINE_CONFIG_FILE
-from ..core.enums import CameraViewType
-from ..core.models import VirtualLine
+from src.core.config import LINE_CONFIG_FILE
+from src.core.enums import CameraViewType
+from src.core.models import VirtualLine
 
 logger = logging.getLogger(__name__)
 

@@ -5,13 +5,12 @@ Object tracking engine using official OC-SORT implementation with YOLOX detector
 import logging
 from typing import List, Optional, Union
 
-import cv2
 import numpy as np
 
-from ..core.models import DetectionResult, TrackingFrame
-from .detector_configs import DetectorConfig, get_config
-from .ocsort_tracker.ocsort import OCSort
-from .yolox_detector import YOLOXDetector
+from src.core.models import DetectionResult, TrackingFrame
+from src.tracking.detector_configs import DetectorConfig, get_config
+from src.tracking.ocsort_tracker.ocsort import OCSort
+from src.tracking.yolox_detector import YOLOXDetector
 
 logger = logging.getLogger(__name__)
 

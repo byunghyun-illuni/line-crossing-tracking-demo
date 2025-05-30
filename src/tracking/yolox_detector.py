@@ -13,7 +13,7 @@ import torchvision.transforms as transforms
 from torchvision.models import detection
 from torchvision.ops import nms  # NMS 추가
 
-from ..core.models import DetectionResult
+from src.core.models import DetectionResult
 
 logger = logging.getLogger(__name__)
 

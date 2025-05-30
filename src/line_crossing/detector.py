@@ -9,12 +9,11 @@ import time
 import uuid
 from typing import Dict, List, Optional, Tuple
 
-import numpy as np
-from shapely.geometry import LineString, Point
+from shapely.geometry import LineString
 
-from ..core.enums import CrossingDirection
-from ..core.models import CrossingEvent, DetectionResult, VirtualLine
-from .manager import LineManager
+from src.core.enums import CrossingDirection
+from src.core.models import CrossingEvent, DetectionResult, VirtualLine
+from src.line_crossing.manager import LineManager
 
 logger = logging.getLogger(__name__)
 

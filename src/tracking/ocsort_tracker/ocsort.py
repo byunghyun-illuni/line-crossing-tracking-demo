@@ -6,7 +6,7 @@ from __future__ import print_function
 
 import numpy as np
 
-from .association import (
+from src.tracking.ocsort_tracker.association import (
     associate,
     associate_kitti,
     ciou_batch,
@@ -16,7 +16,7 @@ from .association import (
     iou_batch,
     linear_assignment,
 )
-from .kalmanfilter import KalmanFilterNew
+from src.tracking.ocsort_tracker.kalmanfilter import KalmanFilterNew
 
 
 def k_previous_obs(observations, cur_age, k):
@@ -86,7 +86,9 @@ class KalmanBoxTracker(object):
         if not orig:
             self.kf = KalmanFilterNew(dim_x=7, dim_z=4)
         else:
-            from .kalmanfilter import KalmanFilterNew as KalmanFilter
+            from src.tracking.ocsort_tracker.kalmanfilter import (
+                KalmanFilterNew as KalmanFilter,
+            )
 
             self.kf = KalmanFilter(dim_x=7, dim_z=4)
         self.kf.F = np.array(
