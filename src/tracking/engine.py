@@ -155,55 +155,66 @@ class ObjectTracker:
             # Update tracker
             tracks = self.tracker.update(dets, img_info, img_size)
 
-            # Convert tracks back to our format - 원본 detection 좌표 보존
-            tracking_results = []
+            # OCSort 좌표를 원본 이미지 크기로 스케일링 복원
+            img_h, img_w = img_info[0], img_info[1]
+            scale = min(img_size[0] / float(img_h), img_size[1] / float(img_w))
 
-            # 먼저 모든 detection에 대해 기본 결과 생성 (track ID 없음)
-            detection_map = {}
+            if len(tracks) > 0:
+                tracks[:, :4] *= scale  # x1,y1,x2,y2를 원본 크기로 복원
+
+            # 모든 detection을 DetectionResult로 변환
+            tracking_results = []
             for det in detections:
                 x, y, w, h = det.bbox
                 center_x = x + w / 2
                 center_y = y + h / 2
 
                 result = DetectionResult(
-                    track_id=-1,  # 기본값으로 설정
+                    track_id=-1,  # 기본값
                     bbox=(x, y, w, h),
                     center_point=(center_x, center_y),
                     confidence=det.confidence,
                     class_name=det.class_name,
                     timestamp=0.0,
                 )
-                detection_map[len(detection_map)] = result
                 tracking_results.append(result)
 
-            # tracks에서 ID 정보만 매핑
+            # OCSort tracks와 detection 매칭하여 track_id 할당
             for track in tracks:
                 x1, y1, x2, y2, track_id = track
 
-                # 가장 가까운 detection 찾기
+                # 가장 높은 IoU를 가진 detection 찾기
                 best_match_idx = -1
-                best_distance = float("inf")
+                best_iou = 0.0
 
-                for i, det in enumerate(detections):
-                    det_x, det_y, det_w, det_h = det.bbox
-                    det_center_x = det_x + det_w / 2
-                    det_center_y = det_y + det_h / 2
+                for i, result in enumerate(tracking_results):
+                    if result.track_id > 0:  # 이미 매칭된 detection은 건너뛰기
+                        continue
 
-                    track_center_x = (x1 + x2) / 2
-                    track_center_y = (y1 + y2) / 2
+                    det_x, det_y, det_w, det_h = result.bbox
+                    det_x1, det_y1 = det_x, det_y
+                    det_x2, det_y2 = det_x + det_w, det_y + det_h
 
-                    # 중심점 거리 계산
-                    distance = (
-                        (det_center_x - track_center_x) ** 2
-                        + (det_center_y - track_center_y) ** 2
-                    ) ** 0.5
+                    # IoU 계산
+                    inter_x1 = max(x1, det_x1)
+                    inter_y1 = max(y1, det_y1)
+                    inter_x2 = min(x2, det_x2)
+                    inter_y2 = min(y2, det_y2)
 
-                    if distance < best_distance and distance < 100:  # 최대 100픽셀 거리
-                        best_distance = distance
-                        best_match_idx = i
+                    if inter_x2 > inter_x1 and inter_y2 > inter_y1:
+                        inter_area = (inter_x2 - inter_x1) * (inter_y2 - inter_y1)
+                        track_area = (x2 - x1) * (y2 - y1)
+                        det_area = det_w * det_h
+                        union_area = track_area + det_area - inter_area
+
+                        if union_area > 0:
+                            iou = inter_area / union_area
+                            if iou > best_iou and iou > 0.3:  # IoU 임계값 0.3
+                                best_iou = iou
+                                best_match_idx = i
 
                 # 매칭된 detection에 track ID 할당
-                if best_match_idx >= 0 and best_match_idx < len(tracking_results):
+                if best_match_idx >= 0:
                     tracking_results[best_match_idx].track_id = int(track_id)
 
             return TrackingFrame(

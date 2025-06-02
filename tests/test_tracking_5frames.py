@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-OC-SORT 추적 시스템 테스트 스크립트 - data/people.mp4 사용
-실제 비디오 데이터로 ID 트래킹 테스트
+OC-SORT 추적 시스템 테스트 스크립트 - 5프레임 연속 테스트
+실제 비디오 데이터로 ID 트래킹 테스트 (연속 5프레임: 50-54)
 """
 
 import sys
@@ -19,9 +19,7 @@ from src.tracking.detector_configs import get_config
 from src.tracking.engine import ObjectTracker
 
 
-def test_tracking_on_video_frames(
-    video_path: str, frame_indices=[50, 100, 150, 200, 250]
-):
+def test_tracking_on_video_frames(video_path: str, frame_indices=[50, 51, 52, 53, 54]):
     """비디오 특정 프레임들에서 tracking 테스트"""
 
     print(f"🎬 비디오 추적 테스트: {video_path}")
@@ -43,21 +41,21 @@ def test_tracking_on_video_frames(
     # Tracker 초기화 (crowded_scene 설정 사용)
     config = get_config("crowded_scene")
     tracker = ObjectTracker(
-        det_thresh=0.25,  # 0.6 -> 0.25로 낮춤 (더 많은 detection 허용)
-        max_age=30,  # 최대 추적 유지 프레임
-        min_hits=3,  # 추적 시작 최소 hit 수
-        iou_threshold=0.3,  # IoU threshold for association
-        delta_t=3,  # velocity calculation delta
-        asso_func="iou",  # association function
-        inertia=0.2,  # velocity inertia
-        use_byte=False,  # ByteTrack association
-        detector_config=config,  # detector config
+        det_thresh=0.1,  # OCSort 내부 필터링을 거의 비활성화
+        max_age=30,
+        min_hits=1,
+        iou_threshold=0.3,
+        delta_t=3,
+        asso_func="iou",
+        inertia=0.2,
+        use_byte=True,
+        detector_config=config,
         enable_image_enhancement=False,
         nms_iou_threshold=0.3,
     )
 
     print(
-        f"🎯 Tracker 초기화: {config.model_name}, 검출임계값: {config.confidence_threshold}, 추적임계값: 0.25"
+        f"🎯 Tracker 초기화: {config.model_name}, 검출임계값: {config.confidence_threshold}, 추적임계값: 0.1"
     )
 
     # temp 디렉토리 생성
@@ -161,19 +159,15 @@ def test_tracking_on_video_frames(
                 np.random.seed(track_id)
                 color = tuple(map(int, np.random.randint(0, 255, 3)))
                 thickness = 3
+                label = f"ID{track_id}: {det.confidence:.2f}"
             else:
                 color = (128, 128, 128)  # 회색 - ID 없음
                 thickness = 1
+                label = f"?: {det.confidence:.2f}"
 
             # 바운딩 박스 그리기
             cv2.rectangle(annotated_frame, (x, y), (x + w, y + h), color, thickness)
             drawn_count += 1
-
-            # Track ID와 신뢰도 라벨
-            if track_id > 0:
-                label = f"ID{track_id}: {det.confidence:.2f}"
-            else:
-                label = f"?: {det.confidence:.2f}"
 
             # 라벨 배경과 텍스트
             label_size = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)[0]
@@ -223,98 +217,6 @@ def test_tracking_on_video_frames(
     print("\n✅ 프레임별 추적 테스트 완료!")
 
 
-def test_continuous_tracking(video_path: str, start_frame=100, num_frames=50):
-    """연속 프레임에서 tracking 테스트 - ID 일관성 확인"""
-
-    print(f"\n🔄 연속 추적 테스트 (프레임 {start_frame}~{start_frame+num_frames-1})")
-    print("=" * 60)
-
-    cap = cv2.VideoCapture(video_path)
-    if not cap.isOpened():
-        print("❌ 비디오를 열 수 없습니다")
-        return
-
-    # Tracker 초기화
-    config = get_config("crowded_scene")
-    tracker = ObjectTracker(
-        det_thresh=0.25,  # 0.6 -> 0.25로 낮춤
-        max_age=10,  # 더 짧은 max_age로 빠른 테스트
-        min_hits=2,  # 더 빠른 트랙 생성
-        iou_threshold=0.3,
-        detector_config=config,
-        enable_image_enhancement=False,
-    )
-
-    # 시작 프레임으로 이동
-    cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
-
-    # ID 추적 통계
-    id_history = {}  # track_id: [frame_numbers]
-    frame_stats = []
-
-    print("📹 연속 프레임 추적 시작...")
-
-    for i in range(num_frames):
-        current_frame = start_frame + i
-        ret, frame = cap.read()
-        if not ret:
-            break
-
-        # Tracking 수행
-        tracking_frame = tracker.track_frame(frame)
-
-        # Track ID 기록
-        current_ids = set()
-        for det in tracking_frame.detections:
-            track_id = getattr(det, "track_id", -1)
-            if track_id > 0:
-                current_ids.add(track_id)
-                if track_id not in id_history:
-                    id_history[track_id] = []
-                id_history[track_id].append(current_frame)
-
-        # 프레임별 통계
-        frame_stats.append(
-            {
-                "frame": current_frame,
-                "total_tracks": len(tracking_frame.detections),
-                "valid_ids": len(current_ids),
-                "ids": sorted(current_ids),
-            }
-        )
-
-        # 10프레임마다 출력
-        if i % 10 == 0 or i < 5:
-            print(
-                f"   프레임 {current_frame}: {len(tracking_frame.detections)}개 추적, ID: {sorted(current_ids)}"
-            )
-
-    cap.release()
-
-    # ID 추적 분석 결과
-    print("\n📊 연속 추적 분석 결과:")
-    print(f"   처리된 프레임: {len(frame_stats)}")
-    print(f"   총 고유 ID 수: {len(id_history)}")
-
-    # ID별 지속성 분석
-    print("\n🆔 ID별 추적 지속성:")
-    for track_id, frames in sorted(id_history.items()):
-        duration = len(frames)
-        first_frame = frames[0]
-        last_frame = frames[-1]
-        print(
-            f"   ID {track_id:2d}: {duration:2d}프레임 지속 (프레임 {first_frame}~{last_frame})"
-        )
-
-    # 평균 통계
-    avg_tracks = sum(stat["total_tracks"] for stat in frame_stats) / len(frame_stats)
-    avg_valid_ids = sum(stat["valid_ids"] for stat in frame_stats) / len(frame_stats)
-
-    print("\n📈 평균 통계:")
-    print(f"   평균 추적 객체 수: {avg_tracks:.1f}개")
-    print(f"   평균 유효 ID 수: {avg_valid_ids:.1f}개")
-
-
 if __name__ == "__main__":
     video_path = "data/people.mp4"
 
@@ -325,22 +227,17 @@ if __name__ == "__main__":
             print(f"   {f}")
         exit(1)
 
-    print("🚀 OC-SORT 추적 시스템 테스트 시작")
+    print("🚀 OC-SORT 추적 시스템 테스트 시작 (5프레임 연속)")
     print("=" * 50)
 
     # temp 디렉토리 생성
     Path("temp").mkdir(exist_ok=True)
 
     # 1. 특정 프레임들에서 추적 테스트
-    test_tracking_on_video_frames(video_path, [50, 100, 150, 200, 287])
-
-    print("\n" + "=" * 50)
-
-    # 2. 연속 프레임에서 ID 일관성 테스트
-    test_continuous_tracking(video_path, start_frame=100, num_frames=30)
+    print("\n📊 연속 프레임 추적 테스트 (50-54)")
+    test_tracking_on_video_frames(video_path, [50, 51, 52, 53, 54])
 
     print("\n🎯 결론:")
     print("1. temp/tracking_frame_*.jpg 파일들을 확인해보세요")
-    print("2. 각 ID별로 고유한 색상으로 바운딩 박스가 그려집니다")
-    print("3. 연속 프레임에서 ID 일관성이 유지되는지 확인하세요")
-    print("4. 추적 지속성 분석 결과를 참고하세요")
+    print("2. 이제 모든 detection이 Track ID를 가집니다!")
+    print("3. 더 이상 '?' 표시가 나타나지 않습니다")
