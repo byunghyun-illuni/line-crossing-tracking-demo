@@ -54,7 +54,7 @@ YOLOXDetector(
 **출처**: [OC-SORT 공식 구현체](https://github.com/noahcao/OC_SORT/tree/master/trackers/ocsort_tracker)를 그대로 사용
 
 ```python
-# 칼만 필터: [x, y, s, r, ẋ, ẏ, ṡ]
+# 7차원 칼만 필터: [x, y, s, r, ẋ, ẏ, ṡ]
 OCSort(
     det_thresh=0.3,      # 추적 시작 임계값
     max_age=100,         # 최대 생존 프레임 수
@@ -65,7 +65,7 @@ OCSort(
 ```
 
 **핵심 알고리즘:**
-- **Kalman Filter**: 상태벡터로 위치/속도 예측
+- **Kalman Filter**: 7차원 상태벡터로 위치/속도 예측
 - **Hungarian Algorithm**: 최적 할당 문제 해결
 - **Observation-Centric Update**: 관찰 중심 상태 업데이트
 - **Velocity Direction Consistency**: 속도 방향 일관성 검사
