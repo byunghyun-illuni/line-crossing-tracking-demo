@@ -104,18 +104,25 @@ class TrackingLineCrossingGUI:
                 f"Video: {width}x{height}, {self.fps:.1f}fps, {self.total_frames} frames"
             )
 
-            # Initialize tracker
-            config = get_config("crowded_scene")
+            # Initialize tracker with VERY strict settings to minimize ID creation
+            # Aggressive settings to prevent ID explosion:
+            # - detector_confidence=0.5: Override config to be even more strict
+            # - det_thresh=0.4: Only very confident detections
+            # - min_hits=5: Require 5 consecutive detections (more strict)
+            # - max_age=60: Keep tracks alive even longer
+            # - iou_threshold=0.4: More generous association (easier to match)
+            config = get_config("high_precision")  # confidence_threshold=0.4
             self.tracker = ObjectTracker(
-                det_thresh=0.1,
-                max_age=30,
-                min_hits=1,
+                det_thresh=0.3,
+                max_age=100,
+                min_hits=3,  # 3 -> 5 (5번 연속 감지 후 트랙 생성)
                 iou_threshold=0.3,
                 delta_t=3,
                 asso_func="iou",
                 inertia=0.2,
                 use_byte=True,
                 detector_config=config,
+                detector_confidence=0.5,  # Override config confidence to 0.5
                 enable_image_enhancement=False,
             )
 
