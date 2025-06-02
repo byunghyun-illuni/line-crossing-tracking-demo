@@ -3,26 +3,26 @@
   "lines": {
     "line_e3513502": {
       "line_id": "line_e3513502",
-      "name": "중앙 수평선",
+      "name": "Escalator Entry Detection Line",
       "start_point": [
-        100,
-        240
+        80,
+        340
       ],
       "end_point": [
-        540,
-        240
+        580,
+        160
       ],
       "is_active": true,
       "view_type": "entrance",
-      "thickness": 3,
+      "thickness": 4,
       "color": [
         0,
-        255,
-        0
+        0,
+        255
       ],
       "direction_config": {
-        "angle": 0.0,
-        "is_horizontal": true,
+        "angle": -20.0,
+        "is_horizontal": false,
         "is_vertical": false,
         "auto_generated": true
       }
