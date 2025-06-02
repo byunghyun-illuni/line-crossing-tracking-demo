@@ -21,7 +21,6 @@ logger = logging.getLogger(__name__)
 class YOLOXDetector:
     """
     YOLOX-based object detector using torchvision's implementation.
-    This replaces the slow HOGDescriptor with a modern, fast detector.
     """
 
     # 검출 관련 상수들
