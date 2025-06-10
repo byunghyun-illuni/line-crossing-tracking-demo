@@ -11,7 +11,7 @@ import os
 import sys
 import time
 from pathlib import Path
-from typing import Dict, List, Literal, Tuple
+from typing import Dict, List, Tuple
 
 import cv2
 import numpy as np
@@ -137,7 +137,7 @@ class TrackingLineCrossingGUI:
         except Exception as e:
             print(f"Failed to load line config: {e}")
 
-    def initialize(self, mode=Literal["video", "lidar"]) -> bool:
+    def initialize(self, mode: str = "video") -> bool:
         """Initialize video and tracker"""
         try:
             # Open video
@@ -157,7 +157,11 @@ class TrackingLineCrossingGUI:
                     f"Video: {width}x{height}, {self.fps:.1f}fps, {self.total_frames} frames"
                 )
             elif mode == "lidar":
-                self.data_reviever.receive_data()
+                print("Initializing Lidar mode...")
+                # 라이다 모드에서는 비디오 캡처를 사용하지 않음
+                self.fps = 30.0  # 기본 FPS 설정
+                self.total_frames = 0  # 라이다는 연속 스트림이므로 0으로 설정
+                print("Lidar mode initialized")
 
             # Initialize tracker with VERY strict settings to minimize ID creation
             # Aggressive settings to prevent ID explosion:
@@ -454,40 +458,41 @@ class TrackingLineCrossingGUI:
         print("Cleanup completed")
 
     def run_lidar(self):
-        """Main execution loop"""
-        if not self.initialize():
+        """Main execution loop for Lidar"""
+        if not self.initialize("lidar"):
             return
 
-        print("Starting tracking + line crossing detection GUI (Refactored)...")
+        print("Starting tracking + line crossing detection GUI with Lidar...")
         print("Press ESC to exit")
         print("=" * 50)
 
         try:
+            frame_count = 0
             while True:
-                # Read frame
-                self.lidar_data_receiver.receive_data()
+                # Read lidar data
+                lidar_images = self.lidar_data_receiver.receive_data()
 
-                cv2.imshow(
-                    "data",
-                    self.lidar_data_receiver.imshow_images[
-                        self.lidar_data_receiver.sensor_sn[0]
-                    ],
-                )
-                cv2.waitKey(1)
+                if lidar_images and self.lidar_data_receiver.sensor_sn:
+                    # Get the first sensor's image
+                    sensor_id = self.lidar_data_receiver.sensor_sn[0]
+                    frame = lidar_images.get(sensor_id)
 
-                # if not ret:
-                #     # Loop video
-                #     self.cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
-                #     self.current_frame = 0
-                #     continue
+                    if frame is not None:
+                        frame_count += 1
+                        self.current_frame = frame_count
 
-                # self.current_frame = int(self.cap.get(cv2.CAP_PROP_POS_FRAMES))
+                        # Process frame with tracking and line crossing
+                        annotated_frame = self.process_frame(frame)
 
-                # # Process frame
-                # annotated_frame = self.process_frame(frame)
+                        # Display processed frame with tracking info
+                        cv2.imshow(self.window_name, annotated_frame)
 
-                # Display
-                # cv2.imshow(self.window_name, annotated_frame)
+                        # Also show raw lidar data for comparison
+                        cv2.imshow("Raw Lidar Data", frame)
+                    else:
+                        print("Warning: No frame data received from lidar")
+                else:
+                    print("Warning: No lidar data received")
 
                 # Handle keyboard input (ESC only)
                 key = cv2.waitKey(1) & 0xFF
