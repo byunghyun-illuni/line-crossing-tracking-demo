@@ -26,29 +26,39 @@ from Crypto.Cipher import AES
 
 from src.lidar.data_reciever import DataReciever
 from src.line_crossing.detector import LineCrossingDetector, VirtualLine
+from src.line_crossing.modes import (
+    TrackingPointMode,
+    get_mode_description,
+    get_tracking_point,
+)
 from src.tracking.detector_configs import get_config
 from src.tracking.engine import ObjectTracker
 
 
 class TrackingLineCrossingGUI:
-    """트래킹 + 라인 크로싱 감지 GUI (리팩토링된 버전)"""
+    """라이다 트래킹 + 라인 크로싱 감지 GUI"""
 
     def __init__(
-        self, video_path: str, line_config_path: str = "configs/line_configs.json"
+        self,
+        line_config_path: str = "configs/line_configs.json",
+        tracking_mode: TrackingPointMode = TrackingPointMode.BOTTOM_CENTER,
     ):
-        self.video_path = video_path
         self.lidar_data_receiver = DataReciever()
-
         self.line_config_path = line_config_path
-        self.cap = None
         self.tracker = None
-        self.crossing_detector = LineCrossingDetector()
+        self.tracking_mode = tracking_mode
+        self.crossing_detector = LineCrossingDetector(tracking_mode=tracking_mode)
         self.lines: Dict[str, VirtualLine] = {}
 
-        # Video state
+        # Lidar state
         self.current_frame = 0
-        self.total_frames = 0
-        self.fps = 30.0
+        self.fps = 30.0  # 기본 FPS
+
+        # FPS 계산용 변수들
+        self.frame_times = []  # 최근 프레임 시간들
+        self.last_frame_time = time.time()
+        self.fps_update_interval = 1.0  # 1초마다 FPS 업데이트
+        self.current_fps = 0.0
 
         # Statistics
         self.tracking_time = 0.0
@@ -56,13 +66,18 @@ class TrackingLineCrossingGUI:
         self.total_tracks = 0
 
         # Display settings
-        self.window_name = "OC-SORT Tracking + Line Crossing (Refactored)"
+        self.window_name = "Lidar Tracking + Line Crossing"
 
         # 라인 설정 로드
         self.load_line_config()
 
         self.model_type = 1
         self.init_lidar_detection_model()
+
+        # 추적 모드 정보 출력
+        mode_desc = get_mode_description(self.tracking_mode)
+        print("라이다 트래킹 시스템 초기화 완료")
+        print(f"추적 모드: {mode_desc}")
 
     def decrypt_model(self, enc_file_path, key):
         with open(enc_file_path, "rb") as f:
@@ -87,15 +102,6 @@ class TrackingLineCrossingGUI:
 
             key = b"M0d3lS3cur3K3y!!"
             decrypted_model = self.decrypt_model(latest_onnx_file, key)
-
-            # self.session = ort.InferenceSession(
-            #     # onnx_path,
-            #     # latest_onnx_file,
-            #     os.path.join(self.bundle_dir, decrypted_model),
-            #     sess_options=ort.SessionOptions(),
-            #     # providers=['OpenVINOExecutionProvider']
-            #     providers = ['CPUExecutionProvider']
-            # )
 
             self.session = ort.InferenceSession(
                 decrypted_model,
@@ -160,142 +166,79 @@ class TrackingLineCrossingGUI:
         except Exception as e:
             print(f"Failed to load line config: {e}")
 
-    def initialize(self, mode: str = "video") -> bool:
-        """Initialize video and tracker"""
+    def initialize(self) -> bool:
+        """라이다 트래킹 시스템 초기화"""
         try:
-            # Open video
-            if mode == "video":
-                self.cap = cv2.VideoCapture(self.video_path)
-                if not self.cap.isOpened():
-                    print(f"Error: Cannot open video: {self.video_path}")
-                    return False
+            print("라이다 트래킹 시스템 초기화 중...")
 
-                # Video info
-                self.fps = self.cap.get(cv2.CAP_PROP_FPS)
-                self.total_frames = int(self.cap.get(cv2.CAP_PROP_FRAME_COUNT))
-                width = int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-                height = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+            # 모니터 해상도 정보 가져오기
+            monitor = get_monitors()[0]
+            screen_width = monitor.width
+            screen_height = monitor.height
+            print(f"화면 해상도: {screen_width}x{screen_height}")
 
-                print(
-                    f"Video: {width}x{height}, {self.fps:.1f}fps, {self.total_frames} frames"
-                )
-            elif mode == "lidar":
-                print("Initializing Lidar mode...")
-                # 라이다 모드에서는 비디오 캡처를 사용하지 않음
-                self.fps = 30.0  # 기본 FPS 설정
-                self.total_frames = 0  # 라이다는 연속 스트림이므로 0으로 설정
-                print("Lidar mode initialized")
-
-            # Initialize tracker with VERY strict settings to minimize ID creation
-            # Aggressive settings to prevent ID explosion:
-            # - detector_confidence=0.5: Override config to be even more strict
-            # - det_thresh=0.4: Only very confident detections
-            # - min_hits=5: Require 5 consecutive detections (more strict)
-            # - max_age=60: Keep tracks alive even longer
-            # - iou_threshold=0.4: More generous association (easier to match)
+            # Initialize tracker with optimized settings
             config = get_config("high_precision")  # confidence_threshold=0.4
             self.tracker = ObjectTracker(
                 det_thresh=0.3,
                 max_age=100,
-                min_hits=3,  # 3 -> 5 (5번 연속 감지 후 트랙 생성)
+                min_hits=3,
                 iou_threshold=0.3,
                 delta_t=3,
                 asso_func="iou",
                 inertia=0.2,
                 use_byte=True,
                 detector_config=config,
-                detector_confidence=0.5,  # Override config confidence to 0.5
+                detector_confidence=0.5,
                 enable_image_enhancement=False,
             )
 
-            print(f"Tracker initialized: {config.model_name}")
+            print(f"트래커 초기화 완료: {config.model_name}")
 
-            # Create GUI window
+            # Create GUI window with screen resolution
             cv2.namedWindow(self.window_name, cv2.WINDOW_NORMAL)
+            cv2.resizeWindow(self.window_name, screen_width, screen_height)
 
             return True
 
         except Exception as e:
-            print(f"Initialization failed: {e}")
+            print(f"초기화 실패: {e}")
             return False
 
     def draw_info_panel(self, frame: np.ndarray) -> np.ndarray:
-        """컴팩트한 우하단 정보 패널 그리기"""
+        """우하단 정보 표시 (간결하게)"""
         annotated_frame = frame.copy()
         img_h, img_w = frame.shape[:2]
 
         # 통계 정보 가져오기
         stats = self.crossing_detector.get_statistics()
 
-        # 컴팩트한 정보만 표시
-        compact_info = [
-            f"Frame: {self.current_frame}/{self.total_frames}",
-            f"Tracks: {stats['active_tracks']} | Time: {self.tracking_time*1000:.1f}ms",
-            f"IN: {stats['total_in']} | OUT: {stats['total_out']}",
+        # 간결한 정보로 압축
+        mode_short = self.tracking_mode.value.upper()[:3]  # 모드 약어 (예: BOT, CEN)
+        info_lines = [
+            f"FPS:{self.current_fps:.1f} T:{stats['active_tracks']} M:{mode_short}",
+            f"IN:{stats['total_in']} OUT:{stats['total_out']}",
         ]
 
-        # 라인별 요약 (한 줄로)
-        if stats["line_stats"]:
-            line_summary = []
-            for line_id, line_stats in stats["line_stats"].items():
-                # 단일 라인이므로 실제 라인 이름 사용
-                line_name = self.lines.get(
-                    line_id,
-                    VirtualLine(
-                        line_id="", name="", start_point=(0, 0), end_point=(0, 0)
-                    ),
-                ).name
-                # 라인명 축약 (첫 단어만)
-                short_name = line_name.split()[0] if line_name else "Line"
-                line_summary.append(
-                    f"{short_name}({line_stats['in']}/{line_stats['out']})"
-                )
+        # 우하단에 한 줄씩 표시
+        for i, text in enumerate(info_lines):
+            # 텍스트 크기 계산
+            text_size = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.35, 1)[0]
 
-            compact_info.append(" | ".join(line_summary))
+            x = img_w - text_size[0] - 8
+            y = img_h - (len(info_lines) - i) * 15 - 8
 
-        # 컴팩트한 박스 크기 계산
-        box_width = 300  # 기존 450 -> 300으로 축소
-        box_height = len(compact_info) * 18 + 12  # 기존 25 -> 18, 패딩 감소
+            # 색상 구분
+            color = (0, 255, 255) if "IN:" in text else (0, 255, 0)
 
-        # 우하단 위치 계산
-        box_x = img_w - box_width - 10  # 화면 우측에서 10픽셀 안쪽
-        box_y = img_h - box_height - 10  # 화면 하단에서 10픽셀 위
-
-        # 반투명 오버레이 생성
-        overlay = annotated_frame.copy()
-        cv2.rectangle(
-            overlay,
-            (box_x, box_y),
-            (box_x + box_width, box_y + box_height),
-            (0, 0, 0),
-            -1,
-        )
-
-        # 반투명 블렌딩 (알파 값: 0.8 = 80% 불투명)
-        alpha = 0.8
-        cv2.addWeighted(overlay, alpha, annotated_frame, 1 - alpha, 0, annotated_frame)
-
-        # 테두리 그리기 (얇게)
-        cv2.rectangle(
-            annotated_frame,
-            (box_x, box_y),
-            (box_x + box_width, box_y + box_height),
-            (255, 255, 255),
-            1,
-        )
-
-        # 텍스트 그리기 (작은 폰트)
-        for i, text in enumerate(compact_info):
-            y = box_y + 15 + i * 18  # 시작 위치와 간격 조정
-            color = (0, 255, 255) if "IN:" in text and "OUT:" in text else (0, 255, 0)
             cv2.putText(
                 annotated_frame,
                 text,
-                (box_x + 8, y),
+                (x, y),
                 cv2.FONT_HERSHEY_SIMPLEX,
-                0.4,
+                0.35,  # 0.5 -> 0.35로 더 작게
                 color,
-                1,
+                1,  # 두께 2 -> 1로 축소
             )
 
         return annotated_frame
@@ -345,6 +288,22 @@ class TrackingLineCrossingGUI:
         # 가상 라인 그리기
         annotated_frame = self.draw_lines(annotated_frame)
 
+        # 좌상단에 센서 SN 표시
+        if self.lidar_data_receiver.sensor_sn:
+            current_sensor_sn = str(self.lidar_data_receiver.sensor_sn[0])
+            sensor_text = f"Sensor SN: {current_sensor_sn}"
+
+            # 센서 SN 텍스트 (박스 없이)
+            cv2.putText(
+                annotated_frame,
+                sensor_text,
+                (10, 20),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.4,  # 0.6 -> 0.4로 축소
+                (0, 255, 255),  # 노란색
+                1,  # 두께도 2 -> 1로 축소
+            )
+
         # 추적 결과 그리기
         for det in tracking_frame.detections:
             x, y, w, h = det.bbox
@@ -370,9 +329,54 @@ class TrackingLineCrossingGUI:
             # Draw bounding box
             cv2.rectangle(annotated_frame, (x, y), (x + w, y + h), color, thickness)
 
-            # Draw center point
+            # Draw tracking point (모드에 따라 다른 위치 - 크고 명확하게)
+            tracking_point = get_tracking_point(det, self.tracking_mode)
+            track_x, track_y = tracking_point
+
+            # 디버깅: 첫 번째 트랙만 좌표 출력 (너무 많은 로그 방지)
+            if track_id == 1 and self.current_frame % 30 == 0:  # 1초마다 한 번
+                center_x, center_y = det.center_point
+                print(
+                    f"ID{track_id}: 중심({center_x:.0f},{center_y:.0f}) -> 추적({track_x:.0f},{track_y:.0f}) [모드:{self.tracking_mode.value}]"
+                )
+
+            # 추적 모드별 다른 모양으로 표시 (더 크고 명확하게)
+            if self.tracking_mode == TrackingPointMode.BOTTOM_CENTER:
+                # 발 추적: 큰 사각형으로 표시
+                cv2.rectangle(
+                    annotated_frame,
+                    (int(track_x) - 8, int(track_y) - 8),
+                    (int(track_x) + 8, int(track_y) + 8),
+                    color,
+                    -1,
+                )
+                cv2.rectangle(
+                    annotated_frame,
+                    (int(track_x) - 8, int(track_y) - 8),
+                    (int(track_x) + 8, int(track_y) + 8),
+                    (255, 255, 255),
+                    2,
+                )  # 흰 테두리
+                # 추가로 발 표시를 위한 작은 선
+                cv2.line(
+                    annotated_frame,
+                    (int(track_x) - 5, int(track_y)),
+                    (int(track_x) + 5, int(track_y)),
+                    (255, 255, 255),
+                    2,
+                )
+            else:
+                # 다른 모드: 큰 원으로 표시
+                cv2.circle(annotated_frame, (int(track_x), int(track_y)), 9, color, -1)
+                cv2.circle(
+                    annotated_frame, (int(track_x), int(track_y)), 9, (255, 255, 255), 2
+                )
+
+            # Draw center point (연한 색상으로 참고용 - 더 작게)
             center_x, center_y = det.center_point
-            cv2.circle(annotated_frame, (int(center_x), int(center_y)), 5, color, -1)
+            cv2.circle(
+                annotated_frame, (int(center_x), int(center_y)), 2, (100, 100, 100), 1
+            )
 
             # Draw track path (최근 위치들)
             if track_id > 0 and track_id in self.crossing_detector.track_histories:
@@ -411,42 +415,53 @@ class TrackingLineCrossingGUI:
         return outputs
 
     def run(self):
-        """Main execution loop"""
+        """라이다 트래킹 메인 실행 루프"""
         if not self.initialize():
             return
 
-        print("Starting tracking + line crossing detection GUI (Refactored)...")
-        print("Press ESC to exit")
+        print("라이다 트래킹 + 라인 크로싱 감지 시작...")
+        print("ESC 키를 누르면 종료됩니다")
         print("=" * 50)
 
         try:
+            frame_count = 0
             while True:
-                # Read frame
-                ret, frame = self.cap.read()
-                if not ret:
-                    # Loop video
-                    self.cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
-                    self.current_frame = 0
-                    continue
+                # 라이다 데이터 수신
+                lidar_images = self.lidar_data_receiver.receive_data()
 
-                self.current_frame = int(self.cap.get(cv2.CAP_PROP_POS_FRAMES))
+                if lidar_images and self.lidar_data_receiver.sensor_sn:
+                    # 첫 번째 센서의 이미지 가져오기
+                    sensor_id = self.lidar_data_receiver.sensor_sn[0]
+                    frame = lidar_images.get(sensor_id)
 
-                # Process frame
-                annotated_frame = self.process_frame(frame)
+                    if frame is not None:
+                        frame_count += 1
+                        self.current_frame = frame_count
 
-                # Display
-                cv2.imshow(self.window_name, annotated_frame)
+                        # FPS 업데이트
+                        self.update_fps()
 
-                # Handle keyboard input (ESC only)
+                        # 프레임 처리 (트래킹 + 라인 크로싱 감지)
+                        annotated_frame = self.process_frame(frame)
+
+                        # 처리된 프레임 표시
+                        cv2.imshow(self.window_name, annotated_frame)
+
+                    else:
+                        print("Warning: 라이다 프레임 데이터가 없습니다")
+                else:
+                    print("Warning: 라이다 데이터를 받지 못했습니다")
+
+                # 키보드 입력 처리 (ESC만)
                 key = cv2.waitKey(1) & 0xFF
                 if key == 27:  # ESC
                     break
 
         except KeyboardInterrupt:
-            print("\nUser interrupted")
+            print("\n사용자 중단")
 
         except Exception as e:
-            print(f"Error: {e}")
+            print(f"오류: {e}")
             import traceback
 
             traceback.print_exc()
@@ -455,100 +470,58 @@ class TrackingLineCrossingGUI:
             self.cleanup()
 
     def cleanup(self):
-        """Cleanup"""
-        if self.cap:
-            self.cap.release()
+        """정리 작업"""
         cv2.destroyAllWindows()
 
-        # Final statistics output
+        # 최종 통계 출력
         stats = self.crossing_detector.get_statistics()
         print("\n" + "=" * 50)
-        print("Final Line Crossing Statistics:")
-        print(f"Total Entries: {stats['total_in']}")
-        print(f"Total Exits: {stats['total_out']}")
+        print("최종 라인 크로싱 통계:")
+        print(f"총 진입: {stats['total_in']}")
+        print(f"총 퇴장: {stats['total_out']}")
 
         for line_id, line_stats in stats["line_stats"].items():
-            line_name = (
-                self.lines.get(line_id, {}).name if line_id in self.lines else line_id
-            )
+            line_name = self.lines.get(
+                line_id,
+                VirtualLine(line_id="", name="", start_point=(0, 0), end_point=(0, 0)),
+            ).name
             print(f"{line_name}: IN={line_stats['in']}, OUT={line_stats['out']}")
 
-        print("Cleanup completed")
+        print("정리 완료")
 
-    def run_lidar(self):
-        """Main execution loop for Lidar"""
-        if not self.initialize("lidar"):
-            return
+    def update_fps(self):
+        """FPS 계산 및 업데이트"""
+        current_time = time.time()
+        self.frame_times.append(current_time)
 
-        print("Starting tracking + line crossing detection GUI with Lidar...")
-        print("Press ESC to exit")
-        print("=" * 50)
+        # 최근 1초간의 프레임만 유지
+        self.frame_times = [t for t in self.frame_times if current_time - t <= 1.0]
 
-        try:
-            frame_count = 0
-            while True:
-                # Read lidar data
-                lidar_images = self.lidar_data_receiver.receive_data()
-
-                if lidar_images and self.lidar_data_receiver.sensor_sn:
-                    # Get the first sensor's image
-                    sensor_id = self.lidar_data_receiver.sensor_sn[0]
-                    frame = lidar_images.get(sensor_id)
-
-                    if frame is not None:
-                        frame_count += 1
-                        self.current_frame = frame_count
-
-                        # Process frame with tracking and line crossing
-                        annotated_frame = self.process_frame(frame)
-
-                        # Display processed frame with tracking info
-                        cv2.imshow(self.window_name, annotated_frame)
-
-                        # Also show raw lidar data for comparison
-                        cv2.imshow("Raw Lidar Data", frame)
-                    else:
-                        print("Warning: No frame data received from lidar")
-                else:
-                    print("Warning: No lidar data received")
-
-                # Handle keyboard input (ESC only)
-                key = cv2.waitKey(1) & 0xFF
-                if key == 27:  # ESC
-                    break
-
-        except KeyboardInterrupt:
-            print("\nUser interrupted")
-
-        except Exception as e:
-            print(f"Error: {e}")
-            import traceback
-
-            traceback.print_exc()
-
-        finally:
-            self.cleanup()
+        # FPS 계산 (최근 1초간 프레임 수)
+        if len(self.frame_times) > 1:
+            self.current_fps = len(self.frame_times) - 1  # 마지막 프레임 제외
+        else:
+            self.current_fps = 0.0
 
 
 def main():
-    """Main function"""
-    video_path = "data/people.mp4"
+    """메인 함수"""
     line_config_path = "configs/line_configs.json"
 
-    if not Path(video_path).exists():
-        print(f"Error: Video file not found: {video_path}")
-        print("Available files in data directory:")
-        for f in Path("data").glob("*.mp4"):
-            print(f"   {f}")
-        return
-
     if not Path(line_config_path).exists():
-        print(f"Warning: Line config file not found: {line_config_path}")
-        print("Running tracking only without line crossing detection.")
+        print(f"Warning: 라인 설정 파일을 찾을 수 없습니다: {line_config_path}")
+        print("라인 크로싱 감지 없이 트래킹만 실행됩니다.")
 
-    # Run GUI
-    gui = TrackingLineCrossingGUI(video_path, line_config_path)
-    gui.run_lidar()
+    # 추적 모드 설정 (필요에 따라 변경 가능)
+    tracking_mode = TrackingPointMode.BOTTOM_CENTER  # 발 추적용
+    # tracking_mode = TrackingPointMode.CENTER      # 기존 중심점
+    # tracking_mode = TrackingPointMode.TOP_CENTER  # 머리 추적용
+
+    print(f"선택된 추적 모드: {get_mode_description(tracking_mode)}")
+
+    # 라이다 트래킹 GUI 실행
+    gui = TrackingLineCrossingGUI(line_config_path, tracking_mode)
+    gui.run()
 
 
 if __name__ == "__main__":

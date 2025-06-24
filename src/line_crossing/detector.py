@@ -8,6 +8,13 @@ import logging
 import time
 from typing import Dict, List, Optional, Tuple
 
+# 추적 포인트 모드 지원 추가
+from src.line_crossing.modes import (
+    TrackingPointMode,
+    get_mode_description,
+    get_tracking_point,
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -70,14 +77,17 @@ class TrackHistory:
 class LineCrossingDetector:
     """라인 크로싱 감지기 (완전 리팩토링 버전)"""
 
-    def __init__(self):
+    def __init__(self, tracking_mode: TrackingPointMode = TrackingPointMode.CENTER):
+        self.tracking_mode = tracking_mode
         self.track_histories: Dict[int, TrackHistory] = {}
         self.crossing_stats = {
             "total_in": 0,
             "total_out": 0,
             "line_stats": {},  # line_id -> {'in': count, 'out': count}
         }
-        logger.info("라인 크로싱 감지기 초기화 완료")
+
+        mode_desc = get_mode_description(tracking_mode)
+        logger.info(f"라인 크로싱 감지기 초기화 완료 - 추적 모드: {mode_desc}")
 
     def detect_crossings(
         self, detections: List, lines: Dict[str, VirtualLine]
@@ -90,7 +100,9 @@ class LineCrossingDetector:
             if track_id <= 0:  # 유효한 track_id가 아니면 무시
                 continue
 
-            center_x, center_y = detection.center_point
+            # 설정된 추적 모드에 따라 추적 포인트 계산
+            tracking_point = get_tracking_point(detection, self.tracking_mode)
+            center_x, center_y = tracking_point
 
             # 추적 이력 업데이트
             if track_id not in self.track_histories:

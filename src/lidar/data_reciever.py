@@ -111,6 +111,8 @@ class DataReciever:
                 name=self.shm_name, size=self.shm_size
             )
         else:
+            import sysv_ipc
+
             self.shm = sysv_ipc.SharedMemory(
                 self.ilidar_cfg_read.output_src_port,
                 sysv_ipc.IPC_CREAT,

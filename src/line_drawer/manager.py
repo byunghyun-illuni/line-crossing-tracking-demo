@@ -61,11 +61,16 @@ class LineDrawer:
         self.load_existing_config()
 
         print("라인 그리기 도구 초기화 완료 (Multi-Sensor)")
+        print("=" * 50)
         print("사용법:")
-        print("  - 마우스 왼쪽 클릭: 점 설정 (2개 점으로 라인 완성)")
-        print("  - 'S' 키: 라인 저장")
-        print("  - 'R' 키: 초기화")
-        print("  - 'ESC' 키: 종료")
+        print("  1) 마우스 왼쪽 클릭으로 시작점 설정")
+        print("  2) 마우스 왼쪽 클릭으로 끝점 설정")
+        print("  3) 'S' 키로 라인 저장")
+        print("")
+        print("키 조작:")
+        print("  S = 라인 저장     R = 라인 초기화")
+        print("  ESC = 종료")
+        print("=" * 50)
 
     def load_existing_config(self):
         """기존 설정 로드"""
@@ -189,60 +194,49 @@ class LineDrawer:
         return display_frame
 
     def draw_status_panel(self, frame: np.ndarray):
-        """상태 패널 그리기"""
+        """상태 패널 그리기 (배경 없이 깔끔하게)"""
         img_h, img_w = frame.shape[:2]
 
         # 상태 정보
         status_lines = [
             f"Sensor: {self.current_sensor_sn or 'Detecting...'}",
-            f"Mode: {'Drawing' if self.drawing_mode else 'Complete'}",
             f"Points: {len(self.points)}/2",
-            f"Line: {self.line_name}",
         ]
 
-        if len(self.points) == 1:
-            status_lines.append(f"Next: Click second point")
+        # 키 조작 안내 (상황별로)
+        if len(self.points) == 0:
+            status_lines.append("Click: First point")
+        elif len(self.points) == 1:
+            status_lines.append("Click: Second point")
         elif len(self.points) == 2:
-            status_lines.append(f"Ready: Press 'S' to save")
-        else:
-            status_lines.append(f"Click: First point")
+            status_lines.append("Press 'S': Save line")
 
-        # 패널 크기 계산
-        panel_width = 280
-        panel_height = len(status_lines) * 25 + 20
-        panel_x = 10
-        panel_y = 10
+        # 하단에 키 조작 안내
+        key_help = ["Keys: S=Save  R=Reset  ESC=Exit"]
 
-        # 반투명 배경
-        overlay = frame.copy()
-        cv2.rectangle(
-            overlay,
-            (panel_x, panel_y),
-            (panel_x + panel_width, panel_y + panel_height),
-            (0, 0, 0),
-            -1,
-        )
-        cv2.addWeighted(overlay, 0.7, frame, 0.3, 0, frame)
-
-        # 테두리
-        cv2.rectangle(
-            frame,
-            (panel_x, panel_y),
-            (panel_x + panel_width, panel_y + panel_height),
-            (255, 255, 255),
-            2,
-        )
-
-        # 텍스트
+        # 좌상단에 상태 정보 표시 (배경 없이)
         for i, line in enumerate(status_lines):
-            y = panel_y + 20 + i * 25
+            y = 25 + i * 20
             cv2.putText(
                 frame,
                 line,
-                (panel_x + 10, y),
+                (10, y),
                 cv2.FONT_HERSHEY_SIMPLEX,
                 0.5,
-                (0, 255, 255),
+                (0, 255, 255),  # 노란색
+                1,
+            )
+
+        # 좌하단에 키 조작 안내 표시
+        for i, line in enumerate(key_help):
+            y = img_h - 15 - (len(key_help) - i - 1) * 20
+            cv2.putText(
+                frame,
+                line,
+                (10, y),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.4,
+                (255, 255, 255),  # 흰색
                 1,
             )
 
@@ -324,7 +318,7 @@ class LineDrawer:
             cv2.setMouseCallback(self.window_name, self.mouse_callback)
 
             print("라인 그리기 도구 시작...")
-            print("라이다 데이터를 받아오는 중...")
+            print("라이다 센서 연결 중...")
 
             while True:
                 # 라이다 데이터 수신
@@ -351,10 +345,10 @@ class LineDrawer:
                     dummy_frame = np.zeros((480, 640, 3), dtype=np.uint8)
                     cv2.putText(
                         dummy_frame,
-                        "Waiting for Lidar data...",
-                        (200, 240),
+                        "Connecting to Lidar...",
+                        (180, 240),
                         cv2.FONT_HERSHEY_SIMPLEX,
-                        1,
+                        0.8,
                         (0, 255, 255),
                         2,
                     )
@@ -367,7 +361,7 @@ class LineDrawer:
                     break
                 elif key == ord("s") or key == ord("S"):  # S - 저장
                     if self.save_line_config():
-                        print("저장 완료! 계속 그리거나 ESC로 종료하세요.")
+                        print("✓ 라인 저장 완료! (계속 그리거나 ESC로 종료)")
                 elif key == ord("r") or key == ord("R"):  # R - 초기화
                     self.reset_line()
 
