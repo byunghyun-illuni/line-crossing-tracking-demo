@@ -280,20 +280,24 @@ class TrackingLineCrossingGUI:
         for line in self.lines.values():
             if line.is_active:
                 cv2.line(
-                    frame, line.start_point, line.end_point, line.color, line.thickness
+                    frame,
+                    line.start_point,
+                    line.end_point,
+                    line.color,
+                    line.thickness * 1,
                 )
 
-                # Display line name
-                text_pos = (line.start_point[0], line.start_point[1] - 10)
-                cv2.putText(
-                    frame,
-                    line.name,
-                    text_pos,
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.6,
-                    line.color,
-                    2,
-                )
+                # # Display line name
+                # text_pos = (line.start_point[0], line.start_point[1] - 10)
+                # cv2.putText(
+                #     frame,
+                #     line.name,
+                #     text_pos,
+                #     cv2.FONT_HERSHEY_SIMPLEX,
+                #     0.6,
+                #     line.color,
+                #     2,
+                # )
         return frame
 
     def process_frame(self, frame: np.ndarray) -> np.ndarray:

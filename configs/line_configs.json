@@ -5,12 +5,12 @@
       "line_id": "line_e3513502",
       "name": "Escalator Entry Detection Line",
       "start_point": [
-        80,
-        340
+        75,
+        135
       ],
       "end_point": [
-        580,
-        160
+        120,
+        120
       ],
       "is_active": true,
       "view_type": "entrance",
