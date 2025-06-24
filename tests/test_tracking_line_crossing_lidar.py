@@ -16,6 +16,7 @@ from typing import Dict, List, Tuple
 import cv2
 import numpy as np
 import onnxruntime as ort
+from screeninfo import get_monitors
 
 # 프로젝트 루트를 Python 경로에 추가
 project_root = Path(__file__).parent
@@ -106,7 +107,7 @@ class TrackingLineCrossingGUI:
             print(ort.get_available_providers())
 
     def load_line_config(self):
-        """Load line configuration file"""
+        """Load line configuration file (Multi-Sensor support)"""
         try:
             config_path = Path(self.line_config_path)
             if not config_path.exists():
@@ -116,23 +117,45 @@ class TrackingLineCrossingGUI:
             with open(config_path, "r", encoding="utf-8") as f:
                 config_data = json.load(f)
 
-            lines_data = config_data.get("lines", {})
+            # 새로운 multi-sensor 구조 처리
+            sensors_data = config_data.get("sensors", {})
 
-            for line_id, line_data in lines_data.items():
-                line = VirtualLine(
-                    line_id=line_id,
-                    name=line_data.get("name", line_id),
-                    start_point=tuple(line_data["start_point"]),
-                    end_point=tuple(line_data["end_point"]),
-                    color=tuple(line_data.get("color", [0, 255, 0])),
-                    thickness=line_data.get("thickness", 3),
-                    is_active=line_data.get("is_active", True),
-                )
-                self.lines[line_id] = line
+            if not sensors_data:
+                print("No sensor configurations found in config file")
+                return
 
-            print(f"Line config loaded: {len(self.lines)} lines")
-            for line_id, line in self.lines.items():
-                print(f"  - {line.name}: {line.start_point} -> {line.end_point}")
+            # 현재 활성 센서 감지 또는 첫 번째 센서 사용
+            current_sensor_sn = None
+            if self.lidar_data_receiver and self.lidar_data_receiver.sensor_sn:
+                current_sensor_sn = str(self.lidar_data_receiver.sensor_sn[0])
+
+            # 현재 센서 설정이 없으면 첫 번째 센서 사용
+            if current_sensor_sn not in sensors_data:
+                current_sensor_sn = list(sensors_data.keys())[0]
+                print(f"Using first available sensor: {current_sensor_sn}")
+
+            sensor_data = sensors_data.get(current_sensor_sn)
+            if not sensor_data or not sensor_data.get("line"):
+                print(f"No line configuration found for sensor {current_sensor_sn}")
+                return
+
+            line_data = sensor_data["line"]
+
+            # 단일 라인 생성 (현재 센서용)
+            line_id = f"sensor_{current_sensor_sn}_line"
+            line = VirtualLine(
+                line_id=line_id,
+                name=line_data.get("name", "Detection Line"),
+                start_point=tuple(line_data["start_point"]),
+                end_point=tuple(line_data["end_point"]),
+                color=tuple(line_data.get("color", [0, 255, 0])),
+                thickness=line_data.get("thickness", 3),
+                is_active=line_data.get("is_active", True),
+            )
+            self.lines[line_id] = line
+
+            print(f"Line config loaded for sensor {current_sensor_sn}: {line.name}")
+            print(f"  - {line.name}: {line.start_point} -> {line.end_point}")
 
         except Exception as e:
             print(f"Failed to load line config: {e}")
@@ -215,13 +238,15 @@ class TrackingLineCrossingGUI:
         if stats["line_stats"]:
             line_summary = []
             for line_id, line_stats in stats["line_stats"].items():
-                line_name = (
-                    self.lines.get(line_id, {}).name
-                    if line_id in self.lines
-                    else line_id
-                )
+                # 단일 라인이므로 실제 라인 이름 사용
+                line_name = self.lines.get(
+                    line_id,
+                    VirtualLine(
+                        line_id="", name="", start_point=(0, 0), end_point=(0, 0)
+                    ),
+                ).name
                 # 라인명 축약 (첫 단어만)
-                short_name = line_name.split()[0] if line_name else line_id
+                short_name = line_name.split()[0] if line_name else "Line"
                 line_summary.append(
                     f"{short_name}({line_stats['in']}/{line_stats['out']})"
                 )
@@ -287,17 +312,6 @@ class TrackingLineCrossingGUI:
                     line.thickness * 1,
                 )
 
-                # # Display line name
-                # text_pos = (line.start_point[0], line.start_point[1] - 10)
-                # cv2.putText(
-                #     frame,
-                #     line.name,
-                #     text_pos,
-                #     cv2.FONT_HERSHEY_SIMPLEX,
-                #     0.6,
-                #     line.color,
-                #     2,
-                # )
         return frame
 
     def process_frame(self, frame: np.ndarray) -> np.ndarray:

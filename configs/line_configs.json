@@ -1,35 +1,33 @@
 {
   "version": "1.0",
-  "lines": {
-    "line_e3513502": {
-      "line_id": "line_e3513502",
-      "name": "Escalator Entry Detection Line",
-      "start_point": [
-        75,
-        135
-      ],
-      "end_point": [
-        120,
-        120
-      ],
-      "is_active": true,
-      "view_type": "entrance",
-      "thickness": 4,
-      "color": [
-        0,
-        0,
-        255
-      ],
-      "direction_config": {
-        "angle": -20.0,
-        "is_horizontal": false,
-        "is_vertical": false,
-        "auto_generated": true
+  "sensors": {
+    "313": {
+      "sensor_sn": "313",
+      "line": {
+        "name": "Detection Line",
+        "start_point": [
+          75,
+          135
+        ],
+        "end_point": [
+          120,
+          120
+        ],
+        "is_active": true,
+        "view_type": "entrance",
+        "thickness": 4,
+        "color": [
+          0,
+          0,
+          255
+        ]
       }
     }
   },
   "metadata": {
-    "total_lines": 1,
-    "active_lines": 1
+    "created_at": "2024-01-01T00:00:00Z",
+    "updated_at": "2024-01-01T00:00:00Z",
+    "total_sensors": 1,
+    "current_sensor": "313"
   }
 }

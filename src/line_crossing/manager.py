@@ -1,12 +1,12 @@
 """
-가상 라인 관리
+단일 가상 라인 관리
 
-가상 라인의 생성, 수정, 삭제, 저장/로드를 담당합니다.
+단일 가상 라인의 생성, 수정, 저장/로드를 담당합니다.
 """
 
 import json
 import logging
-import uuid
+from datetime import datetime
 from pathlib import Path
 from typing import Dict, Optional
 
@@ -18,11 +18,11 @@ logger = logging.getLogger(__name__)
 
 
 class LineManager:
-    """가상 라인 관리 클래스"""
+    """단일 가상 라인 관리 클래스"""
 
     def __init__(self, config_file_path: str = LINE_CONFIG_FILE):
         self.config_file_path = config_file_path
-        self.lines: Dict[str, VirtualLine] = {}
+        self.line: Optional[VirtualLine] = None
         self.auto_save = True
 
         # 설정 파일 디렉토리 생성
@@ -33,7 +33,7 @@ class LineManager:
 
     def create_line(
         self, name: str, start_point: tuple, end_point: tuple, **kwargs
-    ) -> str:
+    ) -> bool:
         """
         새 라인 생성
 
@@ -44,22 +44,19 @@ class LineManager:
             **kwargs: 추가 속성 (view_type, thickness, color 등)
 
         Returns:
-            str: 생성된 라인 ID
+            bool: 생성 성공 여부
         """
         try:
-            # 라인 ID 생성
-            line_id = self._generate_line_id()
-
             # VirtualLine 객체 생성
             line = VirtualLine(
-                line_id=line_id,
+                line_id="main_line",  # 단일 라인이므로 고정 ID
                 name=name,
                 start_point=start_point,
                 end_point=end_point,
                 is_active=kwargs.get("is_active", True),
                 view_type=kwargs.get("view_type", CameraViewType.ENTRANCE),
-                thickness=kwargs.get("thickness", 3.0),
-                color=kwargs.get("color", (0, 255, 0)),
+                thickness=kwargs.get("thickness", 4.0),
+                color=kwargs.get("color", (0, 0, 255)),
                 direction_config=kwargs.get("direction_config", {}),
             )
 
@@ -71,127 +68,118 @@ class LineManager:
                 raise ValueError("Invalid line coordinates")
 
             # 라인 저장
-            self.lines[line_id] = line
+            self.line = line
 
             # 자동 저장
             if self.auto_save:
                 self.save_to_file()
 
-            logger.info(f"라인 생성됨: {name} ({line_id})")
-            return line_id
+            logger.info(f"라인 생성됨: {name}")
+            return True
 
         except Exception as e:
             logger.error(f"라인 생성 실패: {e}")
-            raise
+            return False
 
-    def update_line(self, line_id: str, **kwargs) -> bool:
+    def update_line(self, **kwargs) -> bool:
         """
         라인 업데이트
 
         Args:
-            line_id: 라인 ID
             **kwargs: 업데이트할 속성들
 
         Returns:
             bool: 성공 여부
         """
         try:
-            if line_id not in self.lines:
-                logger.error(f"라인을 찾을 수 없습니다: {line_id}")
+            if self.line is None:
+                logger.error("업데이트할 라인이 없습니다")
                 return False
-
-            line = self.lines[line_id]
 
             # 속성 업데이트
             for key, value in kwargs.items():
-                if hasattr(line, key):
-                    setattr(line, key, value)
+                if hasattr(self.line, key):
+                    setattr(self.line, key, value)
                 else:
                     logger.warning(f"알 수 없는 속성: {key}")
 
             # 좌표가 변경된 경우 유효성 검사
             if "start_point" in kwargs or "end_point" in kwargs:
-                if not line.validate_points():
-                    logger.error(f"업데이트된 라인 좌표가 유효하지 않습니다: {line_id}")
+                if not self.line.validate_points():
+                    logger.error(f"업데이트된 라인 좌표가 유효하지 않습니다")
                     return False
 
                 # 방향 설정 재계산
-                line.direction_config = line._auto_detect_direction_config()
+                self.line.direction_config = self.line._auto_detect_direction_config()
 
             # 자동 저장
             if self.auto_save:
                 self.save_to_file()
 
-            logger.info(f"라인 업데이트됨: {line_id}")
+            logger.info(f"라인 업데이트됨")
             return True
 
         except Exception as e:
             logger.error(f"라인 업데이트 실패: {e}")
             return False
 
-    def delete_line(self, line_id: str) -> bool:
+    def delete_line(self) -> bool:
         """
         라인 삭제
-
-        Args:
-            line_id: 라인 ID
 
         Returns:
             bool: 성공 여부
         """
         try:
-            if line_id not in self.lines:
-                logger.error(f"라인을 찾을 수 없습니다: {line_id}")
+            if self.line is None:
+                logger.error("삭제할 라인이 없습니다")
                 return False
 
-            line_name = self.lines[line_id].name
-            del self.lines[line_id]
+            line_name = self.line.name
+            self.line = None
 
             # 자동 저장
             if self.auto_save:
                 self.save_to_file()
 
-            logger.info(f"라인 삭제됨: {line_name} ({line_id})")
+            logger.info(f"라인 삭제됨: {line_name}")
             return True
 
         except Exception as e:
             logger.error(f"라인 삭제 실패: {e}")
             return False
 
-    def get_line(self, line_id: str) -> Optional[VirtualLine]:
+    def get_line(self) -> Optional[VirtualLine]:
         """라인 조회"""
-        return self.lines.get(line_id)
+        return self.line
 
-    def get_all_lines(self) -> Dict[str, VirtualLine]:
-        """모든 라인 조회"""
-        return self.lines.copy()
+    def has_line(self) -> bool:
+        """라인 존재 여부"""
+        return self.line is not None
 
-    def get_active_lines(self) -> Dict[str, VirtualLine]:
-        """활성 라인만 조회"""
-        return {line_id: line for line_id, line in self.lines.items() if line.is_active}
+    def is_line_active(self) -> bool:
+        """라인 활성 상태 확인"""
+        return self.line is not None and self.line.is_active
 
-    def toggle_line_status(self, line_id: str) -> bool:
+    def toggle_line_status(self) -> bool:
         """
         라인 활성/비활성 토글
-
-        Args:
-            line_id: 라인 ID
 
         Returns:
             bool: 성공 여부
         """
         try:
-            if line_id not in self.lines:
+            if self.line is None:
                 return False
 
-            self.lines[line_id].is_active = not self.lines[line_id].is_active
+            self.line.is_active = not self.line.is_active
 
             # 자동 저장
             if self.auto_save:
                 self.save_to_file()
 
-            status = "활성" if self.lines[line_id].is_active else "비활성"
-            logger.info(f"라인 상태 변경: {line_id} -> {status}")
+            status = "활성" if self.line.is_active else "비활성"
+            logger.info(f"라인 상태 변경: {status}")
             return True
 
         except Exception as e:
@@ -201,7 +189,7 @@ class LineManager:
     def validate_line_config(self, line_data: dict) -> bool:
         """라인 설정 데이터 유효성 검사"""
         try:
-            required_fields = ["line_id", "name", "start_point", "end_point"]
+            required_fields = ["name", "start_point", "end_point"]
 
             # 필수 필드 확인
             for field in required_fields:
@@ -230,19 +218,20 @@ class LineManager:
     def save_to_file(self) -> bool:
         """설정을 파일에 저장"""
         try:
-            # 라인 데이터를 딕셔너리로 변환
-            lines_data = {
-                line_id: line.to_dict() for line_id, line in self.lines.items()
-            }
-
             config_data = {
                 "version": "1.0",
-                "lines": lines_data,
                 "metadata": {
-                    "total_lines": len(self.lines),
-                    "active_lines": len(self.get_active_lines()),
+                    "created_at": datetime.now().isoformat(),
+                    "updated_at": datetime.now().isoformat(),
+                    "total_lines": 1 if self.line else 0,
                 },
             }
+
+            # 라인이 있는 경우에만 추가
+            if self.line:
+                config_data["line"] = self.line.to_dict()
+            else:
+                config_data["line"] = None
 
             # JSON 파일로 저장
             with open(self.config_file_path, "w", encoding="utf-8") as f:
@@ -268,21 +257,19 @@ class LineManager:
                 config_data = json.load(f)
 
             # 라인 데이터 로드
-            lines_data = config_data.get("lines", {})
-            self.lines = {}
+            line_data = config_data.get("line")
+            self.line = None
 
-            for line_id, line_data in lines_data.items():
-                if self.validate_line_config(line_data):
-                    try:
-                        line = VirtualLine.from_dict(line_data)
-                        self.lines[line_id] = line
-                    except Exception as e:
-                        logger.error(f"라인 로드 실패: {line_id} - {e}")
-                        continue
-                else:
-                    logger.warning(f"유효하지 않은 라인 설정 무시: {line_id}")
+            if line_data and self.validate_line_config(line_data):
+                try:
+                    self.line = VirtualLine.from_dict(line_data)
+                    logger.info(f"라인 로드됨: {self.line.name}")
+                except Exception as e:
+                    logger.error(f"라인 로드 실패: {e}")
+                    return False
+            else:
+                logger.info("유효한 라인 설정이 없습니다")
 
-            logger.info(f"라인 설정 로드됨: {len(self.lines)}개 라인")
             return True
 
         except Exception as e:
@@ -327,14 +314,6 @@ class LineManager:
             logger.error(f"설정 복원 실패: {e}")
             return False
 
-    def _generate_line_id(self) -> str:
-        """고유한 라인 ID 생성"""
-        return f"line_{uuid.uuid4().hex[:8]}"
-
-    def _validate_line_data(self, data: dict) -> bool:
-        """라인 데이터 유효성 검사 (내부용)"""
-        return self.validate_line_config(data)
-
     def _ensure_config_directory(self) -> None:
         """설정 파일 디렉토리 생성"""
         try:
@@ -343,25 +322,23 @@ class LineManager:
         except Exception as e:
             logger.error(f"설정 디렉토리 생성 실패: {e}")
 
-    def get_line_count(self) -> int:
-        """총 라인 수 반환"""
-        return len(self.lines)
+    def get_line_info(self) -> Dict:
+        """라인 정보 반환"""
+        if self.line is None:
+            return {
+                "exists": False,
+                "is_active": False,
+                "name": None,
+                "start_point": None,
+                "end_point": None,
+            }
 
-    def get_active_line_count(self) -> int:
-        """활성 라인 수 반환"""
-        return len(self.get_active_lines())
-
-    def clear_all_lines(self) -> bool:
-        """모든 라인 삭제"""
-        try:
-            self.lines.clear()
-
-            if self.auto_save:
-                self.save_to_file()
-
-            logger.info("모든 라인이 삭제되었습니다")
-            return True
-
-        except Exception as e:
-            logger.error(f"라인 전체 삭제 실패: {e}")
-            return False
+        return {
+            "exists": True,
+            "is_active": self.line.is_active,
+            "name": self.line.name,
+            "start_point": self.line.start_point,
+            "end_point": self.line.end_point,
+            "color": self.line.color,
+            "thickness": self.line.thickness,
+        }
