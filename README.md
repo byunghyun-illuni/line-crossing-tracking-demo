@@ -1,185 +1,155 @@
-# 2D Access Control MVP
+# 라이다 기반 객체 추적 및 라인 크로싱 감지 시스템
 
-**OC-SORT 기반 2D 영상에서 가상 라인을 통한 실시간 출입 감지 및 모니터링 시스템**
+**라이다 센서 + AI 모델 + OC-SORT 추적을 통한 실시간 출입 감지 시스템**
 
-## 🎯 프로젝트 개요
+## 🎯 시스템 개요
 
-이 프로젝트는 OC-SORT (Observation-Centric SORT) 알고리즘을 사용하여 2D 영상에서 객체를 추적하고, 가상 라인을 통한 출입 감지 및 모니터링을 수행하는 MVP 시스템입니다.
+라이다 센서에서 UDP 통신으로 프레임 데이터를 수신하고, 라이다 전용 학습 모델을 통해 객체를 감지한 후, OC-SORT로 추적하여 가상 라인 교차를 감지하는 시스템입니다.
 
-## ✨ 주요 기능
+## 🛠️ 설치 및 환경 설정 (Windows)
 
-- **🎥 실시간 비디오 처리**: 30 FPS 실시간 객체 추적
-- **🎯 고성능 객체 감지**: YOLOX (Faster R-CNN ResNet50 FPN) 모델 활용
-- **📏 정확한 라인 크로싱 감지**: CCW 알고리즘 기반 수학적 교차 판정
-- **📊 실시간 통계**: IN/OUT 카운팅 및 추적 경로 시각화
-- **⚡ 즉시 실행 가능**: 설치 후 바로 테스트 가능한 GUI 데모
+### 1. 사전 요구 사항
+- Python 3.11+
+- Git
+- uv (Python 패키지 관리자)
 
-## 🏗️ 시스템 아키텍처
+### 2. uv 설치(window - powershell)
+```powershell
+# Scoop이 설치되어 있지 않다면 먼저 설치
+Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
+Invoke-RestMethod -Uri https://get.scoop.sh | Invoke-Expression
 
-```mermaid
-graph TD
-    A[Video Input] --> B[YOLOX Detector]
-    B --> C[OC-SORT Tracking]
-    C --> D[Line Crossing Detection]
-    D --> E[Statistics & Visualization]
+# uv 설치
+scoop install uv
 ```
+os 상관없이 uv만 설치하면 됩니다.
 
-```
-src/
-├── tracking/
-│   ├── engine.py              # 통합 추적 엔진
-│   ├── yolox_detector.py      # YOLOX 기반 객체 감지기
-│   ├── detector_configs.py    # 감지기 설정 프리셋
-│   └── ocsort_tracker/        # OC-SORT 공식 구현체 (원본 그대로 사용)
-├── line_crossing/
-│   └── detector.py            # 라인 교차 감지 로직
-└── configs/
-    └── line_configs.json      # 가상 라인 설정
-```
 
-## 🧠 핵심 기술 스택
-
-### 1. 객체 감지 (YOLOX)
-```python
-# PyTorch torchvision 기반 사전 훈련 모델 활용
-YOLOXDetector(
-    model_name="fasterrcnn_resnet50_fpn",  # COCO 91클래스 사전 훈련
-    confidence_threshold=0.5,              # 감지 신뢰도 임계값
-    target_classes=["person"],             # 사람 객체만 감지
-    nms_iou_threshold=0.4                  # 중복 제거
-)
-```
-
-### 2. 다중 객체 추적 (OC-SORT)
-**출처**: [OC-SORT 공식 구현체](https://github.com/noahcao/OC_SORT/tree/master/trackers/ocsort_tracker)를 그대로 사용
-
-```python
-# 7차원 칼만 필터: [x, y, s, r, ẋ, ẏ, ṡ]
-OCSort(
-    det_thresh=0.3,      # 추적 시작 임계값
-    max_age=100,         # 최대 생존 프레임 수
-    min_hits=3,          # 트랙 확정을 위한 최소 감지 횟수
-    iou_threshold=0.3,   # IoU 매칭 임계값
-    use_byte=True        # ByteTrack 2단계 매칭
-)
-```
-
-**핵심 알고리즘:**
-- **Kalman Filter**: 7차원 상태벡터로 위치/속도 예측
-- **Hungarian Algorithm**: 최적 할당 문제 해결
-- **Observation-Centric Update**: 관찰 중심 상태 업데이트
-- **Velocity Direction Consistency**: 속도 방향 일관성 검사
-
-### 3. 라인 크로싱 감지
-```python
-def _lines_intersect(p1, p2, p3, p4):
-    """CCW (Counter-Clockwise) 알고리즘으로 선분 교차 판정"""
-    def ccw(A, B, C):
-        return (C[1] - A[1]) * (B[0] - A[0]) > (B[1] - A[1]) * (C[0] - A[0])
-    
-    return ccw(p1, p3, p4) != ccw(p2, p3, p4) and ccw(p1, p2, p3) != ccw(p1, p2, p4)
-
-def _determine_crossing_direction(prev_pos, curr_pos, line):
-    """벡터 외적을 이용한 교차 방향 판정"""
-    # 외적 계산: line_vector × movement_vector
-    cross_product = line_vector[0] * movement_vector[1] - line_vector[1] * movement_vector[0]
-    return "IN" if cross_product < 0 else "OUT"
-```
-
-## 🚀 빠른 시작
-
-### 1. 환경 설정
+### 3. 프로젝트 클론 및 설치
 ```bash
 git clone <repository-url>
 cd line-crossing-tracking-demo
-uv sync  # 또는 pip install -e .
+uv sync --group dev
 ```
 
-### 2. 즉시 실행
+## 🚀 실행 방법
+
+### 1단계: 가상 라인 그리기
 ```bash
-# 메인 데모 (추적 + 라인 크로싱)
-python tests/test_tracking_line_crossing.py
-
-# 기본 추적만 테스트
-python tests/test_tracking_gui.py
+python draw_line.py
 ```
 
-### 3. 실행 결과
-- 실시간 객체 추적 (ID별 색상 구분)
-- 라인 교차시 IN/OUT 카운트 업데이트
-- 추적 경로 시각화
-- 우하단 실시간 통계 패널
+**기능:**
+- 라이다 센서 화면에서 마우스로 가상 라인 그리기
+- 센서별 개별 라인 설정 관리
+- 라인 설정 자동 저장 (`configs/line_configs.json`)
 
-## 📊 성능 지표
+**사용법:**
+- 좌클릭: 시작점/끝점 설정
+- `S`: 라인 저장
+- `R`: 라인 초기화
+- `ESC`: 종료
 
-### 실시간 처리 성능
-- **처리 속도**: 30 FPS (33ms per frame)
-- **지연시간**: < 100ms
-- **메모리 사용**: < 2GB RAM
-- **GPU 가속**: CUDA 지원 시 10배+ 성능 향상
-
-### 추적 정확도
-- **ID 일관성**: 99%+ (동일 객체 ID 유지)
-- **라인 교차 정확도**: 99%+ (CCW 알고리즘 기반)
-- **중복 방지**: 시간 기반 이벤트 필터링 (1초 간격)
-
-## 🔧 주요 라이브러리
-
-### AI/ML 스택
-- **PyTorch + torchvision**: YOLOX 모델 추론
-- **OpenCV**: 컴퓨터 비전 처리
-- **NumPy**: 수치 연산
-- **FilterPy**: 칼만 필터 구현
-
-### 알고리즘
-- **OC-SORT**: [공식 구현체](https://github.com/noahcao/OC_SORT/tree/master/trackers/ocsort_tracker) 활용
-- **CCW Algorithm**: 선분 교차 판정
-- **Cross Product**: 벡터 외적 기반 방향 판정
-
-## 🧪 테스트
-
+### 2단계: 객체 추적 및 라인 크로싱 감지
 ```bash
-# 추적 시스템 테스트
-python test_tracking.py
+python tests/test_tracking_line_crossing_lidar.py
 ```
 
-**테스트 시나리오:**
-- 다중 객체 추적 (3개 객체)
-- 객체 가림 및 재등장 처리
-- 트랙 ID 일관성 유지
-- 라인 교차 정확도 검증
+**기능:**
+- 라이다 센서 데이터 실시간 수신 (UDP)
+- 라이다 전용 학습 모델로 객체 감지
+- OC-SORT 알고리즘으로 객체 추적
+- 발 추적 기반 정확한 라인 크로싱 감지
+- 실시간 IN/OUT 카운팅
 
-## 📈 확장 계획
+## 📊 시스템 플로우
 
-### 단기 목표
-- [x] 가상 라인 크로싱 감지 완성
-- [x] YOLOX 기반 고성능 감지기 통합
-- [ ] 실시간 이벤트 알림 시스템
+```mermaid
+graph TD
+    A[라이다 센서] -->|UDP 통신| B[프레임 수신]
+    B --> C[라이다 AI 모델]
+    C -->|객체 감지| D[YOLOX Detector]
+    D -->|바운딩 박스| E[OC-SORT Tracking]
+    E -->|추적 정보| F[발 위치 추적]
+    F --> G[가상 라인 교차 감지]
+    G --> H[IN/OUT 카운팅]
+    
+    I[draw_line.py] -->|라인 설정| J[line_configs.json]
+    J --> G
+    
+    style A fill:#e1f5fe
+    style C fill:#f3e5f5
+    style E fill:#e8f5e8
+    style G fill:#fff3e0
+```
 
-### 장기 목표
-- [ ] 다중 라인 지원 (복수 출입구)
-- [ ] 다중 카메라 지원
-- [ ] 클라우드 기반 모니터링 대시보드
+## 🧠 핵심 기술
 
-## 📄 라이선스
+### 1. 라이다 데이터 처리
+- **UDP 통신**: 실시간 라이다 프레임 수신
+- **멀티 센서 지원**: 센서별 개별 설정 관리
+- **프레임 단위 처리**: 연속적인 이미지 스트림 처리
 
-이 프로젝트는 **Apache-2.0** 라이선스 하에 배포됩니다.
+### 2. AI 모델 추론
+- **라이다 전용 모델**: 라이다 데이터에 특화된 학습 모델
+- **객체 감지**: 사람 객체 감지 및 바운딩 박스 생성
+- **YOLOX 백본**: 고성능 객체 감지 엔진
 
-### 포함된 오픈소스 라이브러리
-- **OC-SORT**: MIT License ([원본](https://github.com/noahcao/OC_SORT))
-- **FilterPy**: MIT License
-- **기타 라이브러리**: 각각의 라이선스 준수
+### 3. 객체 추적 (OC-SORT)
+- **7차원 칼만 필터**: 위치, 크기, 속도 예측
+- **ID 일관성**: 동일 객체 지속적 추적
+- **다중 객체 처리**: 여러 객체 동시 추적
 
-자세한 내용은 [LICENSE](LICENSE) 파일을 참조하세요.
+### 4. 라인 크로싱 감지
+- **발 추적 모드**: `TrackingPointMode.BOTTOM_CENTER`
+- **CCW 알고리즘**: 수학적 교차 판정
+- **방향 감지**: 벡터 외적 기반 IN/OUT 판정
+- **중복 방지**: 시간 기반 이벤트 필터링
 
-## 🙏 감사의 말
+## 📁 핵심 파일 구조
 
-- [OC-SORT](https://github.com/noahcao/OC_SORT) - Jinkun Cao 등의 CVPR 2023 논문 및 공식 구현체
-- [FilterPy](https://github.com/rlabbe/filterpy) - 칼만 필터 라이브러리
-- [OpenCV](https://opencv.org/) - 컴퓨터 비전 라이브러리
+```
+line-crossing-tracking-demo/
+├── draw_line.py                              # 가상 라인 그리기 도구
+├── tests/
+│   └── test_tracking_line_crossing_lidar.py  # 메인 추적 시스템
+├── configs/
+│   └── line_configs.json                     # 라인 설정 파일
+├── src/
+│   ├── lidar/
+│   │   └── data_receiver.py                  # 라이다 데이터 수신
+│   ├── tracking/
+│   │   ├── engine.py                         # 추적 엔진
+│   │   ├── yolox_detector.py                 # YOLOX 감지기
+│   │   └── ocsort_tracker/                   # OC-SORT 구현
+│   └── line_crossing/
+│       ├── detector.py                       # 라인 크로싱 감지
+│       └── modes.py                          # 추적 포인트 모드
+└── *.pt, *.shas                             # 라이다 AI 모델 파일
+```
 
----
+## ⚙️ 설정 옵션
 
-**개발자**: park.byunghyun (byunghyun@illuni.com)  
-**버전**: 0.1.0  
-**최종 업데이트**: 2024년 12월
+### 추적 포인트 모드
+```python
+# src/line_crossing/modes.py
+TrackingPointMode.BOTTOM_CENTER  # 발 추적 (기본값)
+TrackingPointMode.CENTER         # 중심점 추적
+TrackingPointMode.TOP_CENTER     # 머리 추적
+```
+
+### 검출 설정
+```python
+# 신뢰도 임계값 조정
+detector_config="crowded_scene"  # 복잡한 환경 (임계값 0.25)
+detector_config="balanced"       # 균형잡힌 설정 (임계값 0.6)
+```
+
+
+## 📝 개발 노트
+
+- **패키지 관리**: `uv` 사용
+- **모델 형식**: PyTorch `.pt` 파일
+- **설정 관리**: JSON 기반 라인 설정
+- **통신**: UDP 프로토콜 사용
+- **추적 알고리즘**: OC-SORT 공식 구현체 활용
